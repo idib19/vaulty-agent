@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Agent Runner (Live + Background)",
+  "version": "0.1.0",
+  "permissions": ["tabs", "scripting", "storage", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["overlay.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
+
