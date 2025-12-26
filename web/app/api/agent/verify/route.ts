@@ -23,8 +23,24 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ ok: true }, { headers: corsHeaders });
 }
 
-// Helper for extension (optional): GET latest code
-export function getLatestCode(jobId: string) {
+// Helper function (internal only - not exported to avoid Next.js route validation errors)
+function getLatestCode(jobId: string) {
   return store.get(jobId)?.code ?? null;
+}
+
+// GET endpoint to retrieve latest code (for extension use)
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const jobId = searchParams.get("jobId");
+
+  if (!jobId) {
+    return NextResponse.json(
+      { error: "jobId required" },
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
+  const code = getLatestCode(jobId);
+  return NextResponse.json({ ok: true, code }, { headers: corsHeaders });
 }
 

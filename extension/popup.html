@@ -19,7 +19,10 @@
       <!-- Agent Tab -->
       <div id="tab-agent" class="tab-content active">
         <label class="label">Start URL</label>
-        <input id="url" class="input" placeholder="https://example.com/apply" />
+        <div class="url-row">
+          <input id="url" class="input" placeholder="https://example.com/apply" />
+          <button id="useCurrentTab" class="btn-icon" title="Use current tab URL">📍</button>
+        </div>
 
         <div class="row">
           <label class="radio"><input type="radio" name="mode" value="live" checked /> Live</label>
@@ -35,6 +38,13 @@
           <div><b>Job:</b> <span id="jobId">—</span></div>
           <div><b>Status:</b> <span id="status">idle</span></div>
           <div><b>Step:</b> <span id="step">0</span></div>
+          <div id="jobUrlDisplay" class="job-url hidden"><b>URL:</b> <span id="jobUrl">—</span></div>
+        </div>
+
+        <!-- Continue Section for paused/waiting jobs -->
+        <div id="continueSection" class="continue-section hidden">
+          <div class="info">🔄 Job paused. Ready to continue?</div>
+          <button id="continueJob" class="btn">▶️ Continue</button>
         </div>
 
         <div id="approval" class="approval hidden">
@@ -110,6 +120,43 @@
         <label class="label">Phone</label>
         <input id="profile-phone" class="input" type="tel" placeholder="+1 555 123 4567" />
 
+        <!-- EEO / Demographics Section (common job-board questions) -->
+        <div class="section-title">🧾 EEO / Demographics (Optional)</div>
+        <p class="hint">Common questions on job boards. Choose “Prefer not to say” if you don’t want to disclose.</p>
+
+        <label class="label">Gender</label>
+        <select id="profile-eeo-gender" class="input">
+          <option value="">—</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+          <option value="Non-binary">Non-binary</option>
+          <option value="Prefer not to say">Prefer not to say</option>
+          <option value="Decline to self-identify">Decline to self-identify</option>
+        </select>
+
+        <label class="label">Race / Ethnicity</label>
+        <select id="profile-eeo-raceEthnicity" class="input">
+          <option value="">—</option>
+          <option value="American Indian or Alaska Native">American Indian or Alaska Native</option>
+          <option value="Asian">Asian</option>
+          <option value="Black or African American">Black or African American</option>
+          <option value="Hispanic or Latino">Hispanic or Latino</option>
+          <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian or Other Pacific Islander</option>
+          <option value="White">White</option>
+          <option value="Two or more races">Two or more races</option>
+          <option value="Prefer not to say">Prefer not to say</option>
+          <option value="Decline to self-identify">Decline to self-identify</option>
+        </select>
+
+        <label class="label">Veteran Status</label>
+        <select id="profile-eeo-veteranStatus" class="input">
+          <option value="">—</option>
+          <option value="I am a protected veteran">I am a protected veteran</option>
+          <option value="I am not a protected veteran">I am not a protected veteran</option>
+          <option value="Prefer not to say">Prefer not to say</option>
+          <option value="Decline to self-identify">Decline to self-identify</option>
+        </select>
+
         <!-- Address Section -->
         <div class="section-title">📍 Address</div>
 
@@ -160,10 +207,23 @@
         <input id="profile-website" class="input" placeholder="https://johndoe.com" />
 
         <!-- Resume Section -->
-        <div class="section-title">📄 Resume / CV Data</div>
-        <p class="hint">Paste your resume as plain text or JSON. The agent will use this to fill work history, skills, education, and bio fields.</p>
+        <div class="section-title">📄 Resume / CV</div>
+        
+        <!-- Resume File Upload -->
+        <label class="label">Resume File (PDF, DOC, DOCX)</label>
+        <div class="file-upload-row">
+          <input type="file" id="profile-resumeFile" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display: none;" />
+          <button id="selectResumeFile" class="btn secondary">📎 Select File</button>
+          <span id="resumeFileName" class="file-name">No file selected</span>
+          <button id="removeResumeFile" class="btn-icon danger hidden" title="Remove file">✕</button>
+        </div>
+        <p class="hint">Upload your resume file. The agent will use this when job applications require a file upload.</p>
 
-        <label class="label">Resume (Text or JSON)</label>
+        <hr style="margin: 16px 0; border: none; border-top: 1px solid rgba(255,255,255,.1);" />
+        
+        <p class="hint">Optionally paste resume text/JSON below to help fill work history, skills, education fields.</p>
+
+        <label class="label">Resume Data (Text or JSON)</label>
         <textarea id="profile-resume" class="input textarea" placeholder='Paste your resume text here, or use JSON format:
 
 {

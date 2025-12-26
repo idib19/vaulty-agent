@@ -23,6 +23,50 @@ export interface LLMRequest {
   jsonMode?: boolean;
 }
 
+// Image for vision requests
+export interface LLMImage {
+  base64: string;
+  type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+}
+
+// Vision-enabled LLM request
+export interface LLMVisionRequest extends LLMRequest {
+  images: LLMImage[];
+}
+
+// Suggested alternative element for retry
+export interface AlternativeElement {
+  index: number;
+  text: string;
+  context: string; // MODAL, NAV, MAIN, etc.
+  priority: number;
+}
+
+// Failed action structure for loop context
+export interface FailedAction {
+  type?: string;
+  target?: {
+    by?: string;
+    text?: string;
+    selector?: string;
+    index?: number;
+    elementType?: string;
+  };
+  value?: string;
+  [key: string]: unknown;
+}
+
+// Loop context for vision recovery
+export interface LoopContext {
+  isLoop: boolean;
+  failedAction?: FailedAction;
+  failCount: number;
+  error?: string;
+  suggestedAlternatives?: AlternativeElement[];
+  loopType?: 'semantic' | 'fill' | 'technical';
+  targetDescription?: string;
+}
+
 export interface LLMResponse {
   content: string;
   usage?: {
@@ -38,6 +82,17 @@ export interface LLMError {
   message: string;
   code?: string;
   provider: LLMProvider;
+}
+
+// Element context types
+export type ElementContext = "MODAL" | "NAV" | "SIDEBAR" | "MAIN" | "FOOTER" | "FORM" | "PAGE";
+
+// Dropdown option for custom dropdowns
+export interface DropdownOption {
+  index: number;
+  text: string;
+  value: string;
+  selected: boolean;
 }
 
 // Form field types for LLM context
@@ -58,6 +113,16 @@ export interface FormField {
   autocomplete?: string | null;
   pattern?: string | null;
   maxLength?: number | null;
+  // Validation error detection
+  hasError?: boolean;
+  errorMessage?: string | null;
+  // Element context (MODAL, NAV, MAIN, etc.)
+  context?: ElementContext;
+  // Custom dropdown detection (for div-based comboboxes)
+  isCustomDropdown?: boolean;
+  dropdownExpanded?: boolean;
+  dropdownOptions?: DropdownOption[];
+  ariaControls?: string | null;
 }
 
 export interface FormButton {
@@ -67,6 +132,22 @@ export interface FormButton {
   text: string;
   id: string | null;
   disabled: boolean;
+  // Element context (MODAL, NAV, MAIN, etc.)
+  context?: ElementContext;
+}
+
+// Special elements detected on the page
+export interface SpecialElements {
+  hasCaptcha?: boolean;
+  captchaType?: "recaptcha" | "hcaptcha" | "cloudflare" | "unknown";
+  hasOAuthButtons?: string[]; // ["google", "linkedin", "github", etc.]
+  hasFileUpload?: boolean;
+  hasPasswordField?: boolean;
+  hasCookieBanner?: boolean;
+  // OTP/Verification code detection
+  hasOtpField?: boolean;
+  otpFieldCount?: number;
+  otpFieldIndices?: number[];
 }
 
 export interface PageObservation {
@@ -75,5 +156,9 @@ export interface PageObservation {
   fields: FormField[];
   buttons: FormButton[];
   pageContext: string;
+  specialElements?: SpecialElements;
+  // Modal awareness
+  hasActiveModal?: boolean;
+  modalTitle?: string | null;
 }
 

@@ -51,6 +51,24 @@ function showStatusMsg(elementId, message, isSuccess = true) {
   setTimeout(() => { el.textContent = ""; }, 3000);
 }
 
+// ===== Prefill URL from Current Tab =====
+
+async function prefillCurrentTabUrl() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url && 
+        !tab.url.startsWith('chrome://') && 
+        !tab.url.startsWith('chrome-extension://') &&
+        !tab.url.startsWith('about:')) {
+      document.getElementById("url").value = tab.url;
+      return tab.url;
+    }
+  } catch (e) {
+    console.log("Could not get current tab URL:", e);
+  }
+  return null;
+}
+
 // ===== Tab Navigation =====
 
 document.querySelectorAll(".tab").forEach(tab => {
@@ -80,12 +98,55 @@ async function refreshUI() {
     document.getElementById("approval").classList.add("hidden");
     document.getElementById("passwordRequest").classList.add("hidden");
     document.getElementById("otpRequest").classList.add("hidden");
+    document.getElementById("continueSection").classList.add("hidden");
+    document.getElementById("jobUrlDisplay").classList.add("hidden");
     return;
   }
 
   const job = await getJob(jobId);
-  document.getElementById("status").textContent = job?.status || "unknown";
+  
+  // Format status for display
+  let statusText = job?.status || "unknown";
+  if (statusText === "waiting_for_user") {
+    statusText = "🤔 Waiting for input";
+  } else if (statusText === "running") {
+    statusText = "▶️ Running";
+  } else if (statusText === "done") {
+    statusText = "✅ Done";
+  } else if (statusText === "error") {
+    statusText = "❌ Error";
+  } else if (statusText === "paused_for_approval") {
+    statusText = "⏸️ Awaiting approval";
+  } else if (statusText === "needs_verification") {
+    statusText = "🔐 Needs verification";
+  } else if (statusText === "stopped") {
+    statusText = "⏹️ Stopped";
+  }
+  
+  document.getElementById("status").textContent = statusText;
   document.getElementById("step").textContent = String(job?.step || 0);
+
+  // Show/hide job URL
+  if (job?.startUrl) {
+    document.getElementById("jobUrlDisplay").classList.remove("hidden");
+    const urlDisplay = job.startUrl.length > 40 ? job.startUrl.slice(0, 40) + "..." : job.startUrl;
+    document.getElementById("jobUrl").textContent = urlDisplay;
+    document.getElementById("jobUrl").title = job.startUrl;
+    // Prefill URL field with job URL for easy restart
+    document.getElementById("url").value = job.startUrl;
+  } else {
+    document.getElementById("jobUrlDisplay").classList.add("hidden");
+  }
+
+  // Show/hide continue section for paused/waiting/stopped jobs
+  const canContinue = job?.status === "waiting_for_user" || 
+                      job?.status === "stopped" ||
+                      job?.status === "error";
+  if (canContinue && job?.startUrl) {
+    document.getElementById("continueSection").classList.remove("hidden");
+  } else {
+    document.getElementById("continueSection").classList.add("hidden");
+  }
 
   // Show/hide approval
   if (job?.needsApproval) {
@@ -109,6 +170,11 @@ async function refreshUI() {
   }
 }
 
+// Use Current Tab button
+document.getElementById("useCurrentTab").addEventListener("click", async () => {
+  await prefillCurrentTabUrl();
+});
+
 document.getElementById("start").addEventListener("click", async () => {
   const url = document.getElementById("url").value.trim();
   if (!url) {
@@ -124,9 +190,27 @@ document.getElementById("start").addEventListener("click", async () => {
   const apiBase = await getApiBase();
   await chrome.storage.local.set({ apiBase });
 
-  await setStatus(jobId, { status: "starting", step: 0, needsApproval: false });
+  // Store startUrl in the job state so it persists
+  await setStatus(jobId, { status: "starting", step: 0, needsApproval: false, startUrl: url });
   chrome.runtime.sendMessage({ type: "START_JOB", jobId, startUrl: url, mode });
 
+  refreshUI();
+});
+
+// Continue button for paused/stopped jobs
+document.getElementById("continueJob").addEventListener("click", async () => {
+  const jobId = await getActiveJob();
+  if (!jobId) return;
+  
+  const job = await getJob(jobId);
+  if (!job || !job.startUrl) {
+    alert("No job URL found. Please start a new job.");
+    return;
+  }
+  
+  // Reset job status and resume
+  await setStatus(jobId, { ...job, status: "running", stop: false });
+  chrome.runtime.sendMessage({ type: "RESUME_JOB", jobId });
   refreshUI();
 });
 
@@ -180,6 +264,7 @@ document.getElementById("sendPassword").addEventListener("click", async () => {
 async function loadProfile() {
   const data = await chrome.storage.local.get([PROFILE_KEY]);
   const profile = data[PROFILE_KEY] || {};
+  const custom = profile.custom || {};
   
   // Credentials
   document.getElementById("profile-email").value = profile.email || "";
@@ -190,6 +275,14 @@ async function loadProfile() {
   document.getElementById("profile-firstName").value = profile.firstName || "";
   document.getElementById("profile-lastName").value = profile.lastName || "";
   document.getElementById("profile-phone").value = profile.phone || "";
+
+  // EEO / Demographics (stored under profile.custom)
+  const genderEl = document.getElementById("profile-eeo-gender");
+  const raceEl = document.getElementById("profile-eeo-raceEthnicity");
+  const vetEl = document.getElementById("profile-eeo-veteranStatus");
+  if (genderEl) genderEl.value = custom.gender || "";
+  if (raceEl) raceEl.value = custom["race/ethnicity"] || custom.race || "";
+  if (vetEl) vetEl.value = custom["veteran status"] || custom.veteran || "";
   
   // Address
   const addr = profile.address || {};
@@ -207,7 +300,7 @@ async function loadProfile() {
   document.getElementById("profile-github").value = profile.github || "";
   document.getElementById("profile-website").value = profile.website || "";
   
-  // Resume
+  // Resume Text
   if (profile.resume) {
     // If we have structured resume data, convert to JSON for display
     if (profile.resume.rawText) {
@@ -218,7 +311,105 @@ async function loadProfile() {
   } else {
     document.getElementById("profile-resume").value = "";
   }
+  
+  // Resume File
+  updateResumeFileDisplay(profile.resumeFile);
 }
+
+// Resume file display helper
+function updateResumeFileDisplay(resumeFile) {
+  const fileNameEl = document.getElementById("resumeFileName");
+  const removeBtn = document.getElementById("removeResumeFile");
+  
+  if (resumeFile && resumeFile.name) {
+    const sizeKB = Math.round(resumeFile.size / 1024);
+    fileNameEl.textContent = `${resumeFile.name} (${sizeKB} KB)`;
+    fileNameEl.classList.add("has-file");
+    removeBtn.classList.remove("hidden");
+  } else {
+    fileNameEl.textContent = "No file selected";
+    fileNameEl.classList.remove("has-file");
+    removeBtn.classList.add("hidden");
+  }
+}
+
+// Read file as base64
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Resume file selection
+document.getElementById("selectResumeFile").addEventListener("click", () => {
+  document.getElementById("profile-resumeFile").click();
+});
+
+document.getElementById("profile-resumeFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  
+  // Validate file type
+  const validTypes = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
+  if (!validTypes.includes(file.type)) {
+    showStatusMsg("profileStatus", "Please select a PDF or Word document", false);
+    return;
+  }
+  
+  // Validate file size (max 5MB)
+  const maxSize = 5 * 1024 * 1024;
+  if (file.size > maxSize) {
+    showStatusMsg("profileStatus", "File too large (max 5MB)", false);
+    return;
+  }
+  
+  try {
+    const base64 = await readFileAsBase64(file);
+    
+    // Store in profile
+    const data = await chrome.storage.local.get([PROFILE_KEY]);
+    const profile = data[PROFILE_KEY] || {};
+    
+    profile.resumeFile = {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      base64: base64,
+      uploadedAt: new Date().toISOString()
+    };
+    
+    await chrome.storage.local.set({ [PROFILE_KEY]: profile });
+    updateResumeFileDisplay(profile.resumeFile);
+    showStatusMsg("profileStatus", "✓ Resume file uploaded!", true);
+  } catch (err) {
+    console.error("Failed to read file:", err);
+    showStatusMsg("profileStatus", "Failed to read file", false);
+  }
+});
+
+document.getElementById("removeResumeFile").addEventListener("click", async () => {
+  const data = await chrome.storage.local.get([PROFILE_KEY]);
+  const profile = data[PROFILE_KEY] || {};
+  
+  delete profile.resumeFile;
+  await chrome.storage.local.set({ [PROFILE_KEY]: profile });
+  
+  // Clear file input
+  document.getElementById("profile-resumeFile").value = "";
+  updateResumeFileDisplay(null);
+  showStatusMsg("profileStatus", "Resume file removed", true);
+});
 
 function parseResumeInput(input) {
   const trimmed = input.trim();
@@ -254,6 +445,27 @@ document.getElementById("saveProfile").addEventListener("click", async () => {
   const resumeInput = document.getElementById("profile-resume").value;
   const resume = parseResumeInput(resumeInput);
   
+  // Get existing profile to preserve resumeFile
+  const existingData = await chrome.storage.local.get([PROFILE_KEY]);
+  const existingProfile = existingData[PROFILE_KEY] || {};
+  const existingCustom = existingProfile.custom || {};
+
+  // Update EEO / Demographics in custom fields
+  const nextCustom = { ...existingCustom };
+  const gender = document.getElementById("profile-eeo-gender")?.value || "";
+  const raceEthnicity = document.getElementById("profile-eeo-raceEthnicity")?.value || "";
+  const veteranStatus = document.getElementById("profile-eeo-veteranStatus")?.value || "";
+
+  // Store using stable keys that match common job-board wording
+  if (gender) nextCustom.gender = gender;
+  else delete nextCustom.gender;
+
+  if (raceEthnicity) nextCustom["race/ethnicity"] = raceEthnicity;
+  else delete nextCustom["race/ethnicity"];
+
+  if (veteranStatus) nextCustom["veteran status"] = veteranStatus;
+  else delete nextCustom["veteran status"];
+  
   const profile = {
     // Credentials
     email: document.getElementById("profile-email").value.trim(),
@@ -282,8 +494,14 @@ document.getElementById("saveProfile").addEventListener("click", async () => {
     github: document.getElementById("profile-github").value.trim(),
     website: document.getElementById("profile-website").value.trim(),
     
-    // Resume
+    // Resume (text/JSON data)
     resume: resume,
+    
+    // Resume file (preserved from existing profile)
+    resumeFile: existingProfile.resumeFile,
+
+    // Custom fields (includes EEO / demographic answers)
+    custom: nextCustom,
     
     // Metadata
     updatedAt: new Date().toISOString(),
@@ -449,6 +667,7 @@ function getActionIcon(action) {
     case "NAVIGATE": return "🔗";
     case "WAIT_FOR": return "⏳";
     case "REQUEST_VERIFICATION": return "🔐";
+    case "ASK_USER": return "🤔";
     default: return "▶️";
   }
 }
@@ -477,6 +696,8 @@ function formatActionSummary(action) {
       return `Wait for "${action.target?.text || "?"}"`;
     case "NAVIGATE":
       return `Navigate to ${action.url || "?"}`;
+    case "ASK_USER":
+      return `Ask: ${action.question?.slice(0, 50) || "?"}...`;
     default:
       return action.type || "Unknown";
   }
@@ -496,13 +717,47 @@ function escapeHtml(str) {
 function renderLogEntry(log) {
   const typeClass = log.type === "error" || log.type === "fatal_error" || log.type === "exec_error" 
     ? "error" 
+    : log.type === "ask_user" || log.type === "user_response"
+    ? "verify"
     : getActionTypeClass(log.action);
   
-  const icon = log.type === "error" || log.type === "fatal_error" ? "❌" : getActionIcon(log.action);
+  const icon = log.type === "error" || log.type === "fatal_error" ? "❌" 
+    : log.type === "ask_user" ? "🤔"
+    : log.type === "user_response" ? "💬"
+    : getActionIcon(log.action);
   const summary = log.message || formatActionSummary(log.action);
   
   // Build details sections
   let detailsHtml = "";
+  
+  // Thinking section (new!)
+  if (log.thinking) {
+    detailsHtml += `
+      <div class="log-section">
+        <div class="log-section-title">💭 Agent Thinking</div>
+        <div class="log-section-content" style="font-style: italic; color: #a5b4fc;">${escapeHtml(log.thinking)}</div>
+      </div>
+    `;
+  }
+  
+  // Confidence indicator (new!)
+  if (typeof log.confidence === "number") {
+    const confidencePercent = Math.round(log.confidence * 100);
+    const confidenceColor = log.confidence >= 0.8 ? "#22c55e" : log.confidence >= 0.5 ? "#eab308" : "#ef4444";
+    detailsHtml += `
+      <div class="log-section">
+        <div class="log-section-title">Confidence</div>
+        <div class="log-section-content">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="flex: 1; height: 6px; background: rgba(255,255,255,.1); border-radius: 3px; overflow: hidden;">
+              <div style="width: ${confidencePercent}%; height: 100%; background: ${confidenceColor};"></div>
+            </div>
+            <span style="color: ${confidenceColor}; font-weight: 500;">${confidencePercent}%</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   
   // Action JSON
   if (log.action) {
@@ -512,6 +767,26 @@ function renderLogEntry(log) {
         <div class="log-section-content json">${escapeHtml(JSON.stringify(log.action, null, 2))}</div>
       </div>
     `;
+  }
+  
+  // Special elements detected
+  if (log.observation?.specialElements) {
+    const se = log.observation.specialElements;
+    const parts = [];
+    if (se.hasCaptcha) parts.push(`⚠️ CAPTCHA (${se.captchaType || "unknown"})`);
+    if (se.hasOAuthButtons?.length) parts.push(`🔑 OAuth: ${se.hasOAuthButtons.join(", ")}`);
+    if (se.hasFileUpload) parts.push("📎 File upload");
+    if (se.hasPasswordField) parts.push("🔒 Password field");
+    if (se.hasCookieBanner) parts.push("🍪 Cookie banner");
+    
+    if (parts.length > 0) {
+      detailsHtml += `
+        <div class="log-section">
+          <div class="log-section-title">Special Elements Detected</div>
+          <div class="log-section-content">${parts.join(" • ")}</div>
+        </div>
+      `;
+    }
   }
   
   // Observation summary
@@ -670,4 +945,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   await loadLogs();
   wireBehaviorUI();
   wireLogsUI();
+  
+  // Prefill URL from current tab if no URL is set
+  const urlInput = document.getElementById("url");
+  if (!urlInput.value) {
+    await prefillCurrentTabUrl();
+  }
 })();

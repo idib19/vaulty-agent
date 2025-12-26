@@ -51,6 +51,7 @@ export interface UserProfile {
   password?: string;
   preferOAuth?: boolean;
   oauthProvider?: "google" | "linkedin" | "github" | "apple";
+  // Note: email field should be in Vaulty proxy format (user@mailbox.vaulty.ca) for auto-OTP
   
   // Address
   address?: {
@@ -71,6 +72,15 @@ export interface UserProfile {
   
   // Resume data
   resume?: ResumeData;
+  
+  // Resume file (for upload to job applications)
+  resumeFile?: {
+    name: string;
+    type: string;
+    size: number;
+    base64: string;
+    uploadedAt?: string;
+  };
   
   // Additional fields (flexible key-value)
   custom?: Record<string, string>;
@@ -207,6 +217,11 @@ export function profileToContext(profile: UserProfile): Record<string, string> {
     Object.entries(profile.custom).forEach(([key, value]) => {
       context[key.toLowerCase()] = value;
     });
+  }
+  
+  // Resume file availability (for UPLOAD_FILE action)
+  if (profile.resumeFile?.base64) {
+    context["RESUME FILE AVAILABLE"] = `Yes - ${profile.resumeFile.name} (${Math.round(profile.resumeFile.size / 1024)} KB)`;
   }
   
   return context;
