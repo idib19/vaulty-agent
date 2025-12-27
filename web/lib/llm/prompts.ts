@@ -771,6 +771,7 @@ export function buildPlanningPrompt(
     email: !!profileContext["email"],
     phone: !!profileContext["phone"],
     location: !!profileContext["location"],
+    country: !!profileContext["country"],
     linkedIn: !!profileContext["linkedIn"],
     github: !!profileContext["github"],
     portfolio: !!profileContext["portfolio"],
@@ -788,6 +789,12 @@ export function buildPlanningPrompt(
       requiredFieldsMissingData.push("Full name");
     } else if ((label.includes("location") || label.includes("city") || label.includes("address")) && !profileAvailable.location) {
       requiredFieldsMissingData.push("Location");
+    } else if (label.includes("email") && !profileAvailable.email) {
+      requiredFieldsMissingData.push("Email");
+    } else if (label.includes("phone") && !profileAvailable.phone) {
+      requiredFieldsMissingData.push("Phone number");
+    } else if (label === "country" || label.startsWith("country ") || label.endsWith(" country") || label.includes("country*")) {
+      if (!profileAvailable.country) requiredFieldsMissingData.push("Country");
     } else if (label.includes("linkedin") && !profileAvailable.linkedIn) {
       requiredFieldsMissingData.push("LinkedIn URL");
     } else if (label.includes("portfolio") || label.includes("website")) {

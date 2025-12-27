@@ -31,6 +31,493 @@
 let highlightedElements = [];
 let pendingAskUserResponse = null;
 
+// ============================================================================
+// OBSERVATION GATING: Network idle, SPA route changes, DOM stability
+// ============================================================================
+
+// Configuration defaults (tunable)
+const OBSERVATION_CONFIG = {
+  networkIdleMs: 800,
+  networkMaxMs: 8000,
+  domStableMs: 400,
+  domMaxMs: 5000,
+  scrollDwellMs: { min: 80, max: 150 }
+};
+
+// Network idle tracking
+let pendingRequests = 0;
+let lastActivityTimestamp = Date.now();
+
+// Patch fetch to track requests
+const originalFetch = window.fetch;
+window.fetch = function(...args) {
+  pendingRequests++;
+  lastActivityTimestamp = Date.now();
+  const promise = originalFetch.apply(this, args);
+  promise.finally(() => {
+    pendingRequests = Math.max(0, pendingRequests - 1);
+    lastActivityTimestamp = Date.now();
+  });
+  return promise;
+};
+
+// Patch XMLHttpRequest to track requests
+const originalXHROpen = XMLHttpRequest.prototype.open;
+const originalXHRSend = XMLHttpRequest.prototype.send;
+
+XMLHttpRequest.prototype.open = function(...args) {
+  this._agentTracked = true;
+  return originalXHROpen.apply(this, args);
+};
+
+XMLHttpRequest.prototype.send = function(...args) {
+  if (this._agentTracked) {
+    pendingRequests++;
+    lastActivityTimestamp = Date.now();
+    this.addEventListener('loadend', () => {
+      pendingRequests = Math.max(0, pendingRequests - 1);
+      lastActivityTimestamp = Date.now();
+    }, { once: true });
+    this.addEventListener('error', () => {
+      pendingRequests = Math.max(0, pendingRequests - 1);
+      lastActivityTimestamp = Date.now();
+    }, { once: true });
+  }
+  return originalXHRSend.apply(this, args);
+};
+
+// Wait for network idle
+async function waitForNetworkIdle({ idleMs = OBSERVATION_CONFIG.networkIdleMs, maxMs = OBSERVATION_CONFIG.networkMaxMs } = {}) {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < maxMs) {
+    if (pendingRequests === 0) {
+      const idleStart = Date.now();
+      while (Date.now() - idleStart < idleMs) {
+        if (pendingRequests > 0) break;
+        await new Promise(r => setTimeout(r, 50));
+      }
+      if (pendingRequests === 0) return;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+// SPA route-change tracking
+let routeVersion = 0;
+let lastNavAt = Date.now();
+let lastHref = location.href;
+
+// Wrap history.pushState
+const originalPushState = history.pushState;
+history.pushState = function(...args) {
+  routeVersion++;
+  lastNavAt = Date.now();
+  const newHref = location.href;
+  if (newHref !== lastHref) {
+    lastHref = newHref;
+    try {
+      chrome.runtime.sendMessage({ type: "ROUTE_CHANGED", href: newHref }).catch(() => {});
+    } catch (e) {
+      // Ignore errors (e.g., extension context invalidated)
+    }
+  }
+  return originalPushState.apply(this, args);
+};
+
+// Wrap history.replaceState
+const originalReplaceState = history.replaceState;
+history.replaceState = function(...args) {
+  routeVersion++;
+  lastNavAt = Date.now();
+  const newHref = location.href;
+  if (newHref !== lastHref) {
+    lastHref = newHref;
+    try {
+      chrome.runtime.sendMessage({ type: "ROUTE_CHANGED", href: newHref }).catch(() => {});
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  return originalReplaceState.apply(this, args);
+};
+
+// Listen to popstate
+window.addEventListener('popstate', () => {
+  routeVersion++;
+  lastNavAt = Date.now();
+  const newHref = location.href;
+  if (newHref !== lastHref) {
+    lastHref = newHref;
+    try {
+      chrome.runtime.sendMessage({ type: "ROUTE_CHANGED", href: newHref }).catch(() => {});
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+});
+
+// DOM stability tracking
+async function waitForDomStability({ stableMs = OBSERVATION_CONFIG.domStableMs, maxMs = OBSERVATION_CONFIG.domMaxMs } = {}) {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    let lastMutationTime = Date.now();
+    let stableTimeout = null;
+    
+    // Compute a simple hash of DOM structure (bounding box count + text size)
+    function computeDomHash() {
+      const elements = document.querySelectorAll('*');
+      let hash = elements.length;
+      // Add text content length as a factor
+      hash += (document.body?.innerText?.length || 0) % 1000;
+      return hash;
+    }
+    
+    let lastHash = computeDomHash();
+    
+    const observer = new MutationObserver(() => {
+      lastMutationTime = Date.now();
+      const currentHash = computeDomHash();
+      
+      // If hash changed, reset stability timer
+      if (currentHash !== lastHash) {
+        lastHash = currentHash;
+        if (stableTimeout) clearTimeout(stableTimeout);
+        stableTimeout = setTimeout(() => {
+          observer.disconnect();
+          resolve();
+        }, stableMs);
+      }
+    });
+    
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true
+    });
+    
+    // Initial stability check
+    stableTimeout = setTimeout(() => {
+      observer.disconnect();
+      resolve();
+    }, stableMs);
+    
+    // Max timeout
+    setTimeout(() => {
+      if (stableTimeout) clearTimeout(stableTimeout);
+      observer.disconnect();
+      resolve();
+    }, maxMs);
+  });
+}
+
+// Compose waitForPageReady
+let pageReadyPromise = null;
+let pageReadyReason = null;
+
+async function waitForPageReady(reason = "initial") {
+  // If there's already a pending promise, reuse it (unless reason suggests we should re-check)
+  if (pageReadyPromise && reason === "initial") {
+    return pageReadyPromise;
+  }
+  
+  pageReadyReason = reason;
+  pageReadyPromise = (async () => {
+    const maxTotalMs = Math.max(
+      OBSERVATION_CONFIG.networkMaxMs,
+      OBSERVATION_CONFIG.domMaxMs
+    ) + 2000; // Add buffer
+    const startTime = Date.now();
+    
+    // Step 1: Wait for document ready
+    if (document.readyState !== "complete" && document.readyState !== "loaded") {
+      await new Promise((resolve) => {
+        if (document.readyState === "complete" || document.readyState === "loaded") {
+          resolve();
+        } else {
+          window.addEventListener('load', resolve, { once: true });
+          // Timeout after 5 seconds
+          setTimeout(resolve, 5000);
+        }
+      });
+    }
+    
+    // Check timeout
+    if (Date.now() - startTime > maxTotalMs) return;
+    
+    // Step 2: Wait for network idle
+    await waitForNetworkIdle();
+    
+    // Check timeout
+    if (Date.now() - startTime > maxTotalMs) return;
+    
+    // Step 3: Wait for DOM stability
+    await waitForDomStability();
+    
+    return { reason, routeVersion, lastNavAt };
+  })();
+  
+  return pageReadyPromise;
+}
+
+// ============================================================================
+// EFFICIENT INTERACTION HELPERS
+// ============================================================================
+
+// Scroll element into view with minimal delay
+async function scrollIntoViewEfficient(el) {
+  const rect = el.getBoundingClientRect();
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
+
+  // Check if element is already in viewport (with small margin)
+  const margin = 5;
+  const inViewport =
+    rect.top >= -margin &&
+    rect.left >= -margin &&
+    rect.bottom <= viewportHeight + margin &&
+    rect.right <= viewportWidth + margin;
+
+  if (!inViewport) {
+    // Use instant scroll for efficiency
+    el.scrollIntoView({
+      behavior: "instant",
+      block: "center",
+      inline: "center"
+    });
+    // Minimal wait for scroll
+    await new Promise(r => setTimeout(r, 10));
+  }
+}
+
+// Fast click using optimized synthetic mouse events
+async function clickEfficient(el) {
+  try {
+    await scrollIntoViewEfficient(el);
+
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // Optimized synthetic mouse events for maximum efficiency
+    const mouseOpts = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: 1,
+      // Add realistic timing properties
+      timeStamp: Date.now(),
+      screenX: x + window.screenX,
+      screenY: y + window.screenY
+    };
+
+    // Minimal event sequence for maximum efficiency
+    el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+    el.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+    el.dispatchEvent(new MouseEvent('click', mouseOpts));
+
+  } catch (e) {
+    // Ultimate fallback
+    console.info("[agent] falling back to basic click", { reason: e.message });
+    el.click();
+  }
+}
+
+// Smart dropdown click with adaptive waiting
+async function clickDropdownTrigger(el) {
+  try {
+    await scrollIntoViewEfficient(el);
+
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // Check if already expanded
+    const isExpanded = el.getAttribute("aria-expanded") === "true" ||
+                       el.classList.contains("open") ||
+                       el.classList.contains("expanded");
+
+    if (isExpanded) return true;
+
+    // Fast click
+    const mouseOpts = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      buttons: 1
+    };
+
+    el.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+    el.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+    el.dispatchEvent(new MouseEvent('click', mouseOpts));
+
+    // Smart wait: poll for expansion instead of fixed delay
+    const startTime = Date.now();
+    while (Date.now() - startTime < 1000) { // Max 1 second
+      await new Promise(r => setTimeout(r, 10)); // Poll every 10ms
+
+      const nowExpanded = el.getAttribute("aria-expanded") === "true" ||
+                          el.classList.contains("open") ||
+                          el.classList.contains("expanded");
+
+      if (nowExpanded) {
+        return true;
+      }
+    }
+
+    // If we get here, expansion wasn't detected - try fallback
+    console.info("[agent] dropdown expansion not detected, using fallback");
+    el.click();
+    await new Promise(r => setTimeout(r, 100)); // Brief fallback wait
+    return true;
+
+  } catch (e) {
+    console.info("[agent] dropdown click failed, using basic click", { reason: e.message });
+    el.click();
+    await new Promise(r => setTimeout(r, 100));
+    return false;
+  }
+}
+
+// Ultra-fast element interaction
+async function interactElement(el, action = 'click') {
+  await scrollIntoViewEfficient(el);
+
+  const rect = el.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  const baseOpts = {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: x,
+    clientY: y,
+    button: 0,
+    buttons: 1
+  };
+
+  try {
+    switch (action) {
+      case 'click':
+        el.dispatchEvent(new MouseEvent('mousedown', baseOpts));
+        el.dispatchEvent(new MouseEvent('mouseup', baseOpts));
+        el.dispatchEvent(new MouseEvent('click', baseOpts));
+        break;
+
+      case 'mousedown':
+        el.dispatchEvent(new MouseEvent('mousedown', baseOpts));
+        break;
+
+      case 'mouseup':
+        el.dispatchEvent(new MouseEvent('mouseup', baseOpts));
+        break;
+
+      case 'hover':
+        el.dispatchEvent(new MouseEvent('mouseover', baseOpts));
+        el.dispatchEvent(new MouseEvent('mouseenter', { ...baseOpts, bubbles: false }));
+        break;
+
+      default:
+        el[action]?.(); // Direct method call as fallback
+    }
+  } catch (e) {
+    // Fallback to direct method
+    if (typeof el[action] === 'function') {
+      el[action]();
+    }
+  }
+}
+
+// Fast focus method
+async function focusEfficient(el) {
+  try {
+    await scrollIntoViewEfficient(el);
+
+    // For focusable elements, quick click if needed
+    const needsClick = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ||
+                      el.getAttribute('contenteditable') === 'true';
+
+    if (needsClick && document.activeElement !== el) {
+      await clickEfficient(el);
+      // Very brief wait
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    // Ensure focus
+    if (document.activeElement !== el) {
+      el.focus({ preventScroll: true });
+    }
+  } catch (e) {
+    console.info("[agent] focus failed, using direct focus", { reason: e.message });
+    el.focus({ preventScroll: true });
+  }
+}
+
+// Type value with incremental input events
+async function typeValue(el, value, clear = true) {
+  try {
+    await focusEfficient(el);
+    
+    if (clear) {
+      el.value = "";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    
+    // Try setRangeText if available (for inputs/textarea)
+    if (el.setRangeText && typeof el.setRangeText === 'function') {
+      try {
+        el.setRangeText(value, 0, el.value.length, 'end');
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return;
+      } catch (e) {
+        // Fall through to incremental typing
+      }
+    }
+    
+    // Incremental typing simulation (for better compatibility)
+    const chars = value.split('');
+    for (let i = 0; i < chars.length; i++) {
+      el.value += chars[i];
+      el.dispatchEvent(new KeyboardEvent('keydown', { 
+        bubbles: true, 
+        key: chars[i],
+        code: `Key${chars[i].toUpperCase()}` 
+      }));
+      el.dispatchEvent(new KeyboardEvent('keypress', { 
+        bubbles: true, 
+        key: chars[i] 
+      }));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { 
+        bubbles: true, 
+        key: chars[i] 
+      }));
+      
+      // Small delay between characters (5-15ms)
+      if (i < chars.length - 1) {
+        await new Promise(r => setTimeout(r, 5 + Math.random() * 10));
+      }
+    }
+    
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  } catch (e) {
+    console.info("[agent] falling back to DOM fill", { reason: e.message });
+    // Fallback to direct assignment
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}
+
 function norm(s) {
   return (s || "").trim().toLowerCase();
 }
@@ -894,7 +1381,10 @@ function observe() {
     hasActiveModal: !!activeModal,
     modalTitle: activeModal?.title || null,
     // Legacy field for backward compatibility
-    text: pageContext
+    text: pageContext,
+    // Route tracking info
+    routeVersion,
+    lastNavAt
   };
 }
 
@@ -958,7 +1448,9 @@ async function execute(action) {
       const el = resolveTarget(action.target);
       if (!el) return { ok: false, fatal: false, error: "CLICK target not found" };
       highlight(el);
-      el.click();
+
+      // Use efficient click method
+      await clickEfficient(el);
       return { ok: true };
     }
 
@@ -976,11 +1468,19 @@ async function execute(action) {
       }
       
       highlight(el);
-      el.focus();
-      if (action.clear !== false) el.value = "";
-      el.value = action.value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      
+      // Use native-ish typing path as default
+      try {
+        await typeValue(el, action.value, action.clear !== false);
+      } catch (e) {
+        console.info("[agent] falling back to DOM fill", { reason: e.message });
+        // Fallback to old path
+        el.focus();
+        if (action.clear !== false) el.value = "";
+        el.value = action.value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       return { ok: true };
     }
 
@@ -1004,17 +1504,10 @@ async function execute(action) {
       // Check if dropdown is already expanded
       let isExpanded = el.getAttribute("aria-expanded") === "true";
       
-      // Step 1: Click to open if not expanded
+      // Step 1: Click to open if not expanded (use efficient dropdown click)
       if (!isExpanded) {
-        el.click();
-        el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-        
-        // Wait for dropdown to open
-        await new Promise(r => setTimeout(r, 300));
-        
-        // Check again
-        isExpanded = el.getAttribute("aria-expanded") === "true";
+        const expanded = await clickDropdownTrigger(el);
+        isExpanded = expanded || el.getAttribute("aria-expanded") === "true";
       }
       
       // Step 2: Find the listbox/options container
@@ -1079,14 +1572,12 @@ async function execute(action) {
         return { ok: false, fatal: false, error: `SELECT_CUSTOM: Option "${targetValue}" not found. Available: ${availableOptions}` };
       }
       
-      // Click the option
+      // Click the option (use efficient click)
       highlight(matchedOption);
-      matchedOption.click();
-      matchedOption.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-      matchedOption.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      
-      // Wait for selection to register
-      await new Promise(r => setTimeout(r, 150));
+      await clickEfficient(matchedOption);
+
+      // Minimal wait for selection to register
+      await new Promise(r => setTimeout(r, 50));
       
       return { ok: true, note: `Selected "${matchedOption.textContent.trim()}"` };
     }
@@ -1095,8 +1586,18 @@ async function execute(action) {
       const el = resolveTarget(action.target);
       if (!el) return { ok: false, fatal: false, error: "CHECK target not found" };
       highlight(el);
-      el.checked = action.checked !== false;
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      
+      // Efficient checkbox/radio handling
+      if (el.type === "checkbox" || el.type === "radio") {
+        // Only click if state needs to change
+        if (el.checked !== (action.checked !== false)) {
+          await clickEfficient(el);
+        }
+      } else {
+        // Fallback to direct state mutation
+        el.checked = action.checked !== false;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       return { ok: true };
     }
 
@@ -1212,7 +1713,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     
     if (msg.type === "OBSERVE") {
-      return sendResponse(observe());
+      // Reason can be "initial", "spa-route-change", or "manual"
+      // Note: After SPA route changes (detected via history.pushState/replaceState/popstate),
+      // the next OBSERVE will await page readiness (network idle + DOM stability) but won't
+      // automatically re-trigger unless the caller explicitly requests it. The caller can
+      // pass reason: "spa-route-change" to indicate this is a route-change-triggered observation.
+      const reason = msg.reason || "initial";
+      
+      // Wait for page readiness (network idle + DOM stability)
+      // This ensures we observe the page when it's stable, not mid-transition
+      try {
+        await waitForPageReady(reason);
+      } catch (e) {
+        console.warn("[agent] waitForPageReady error:", e);
+        // Continue anyway - don't block observation
+      }
+      
+      sendResponse(observe());
+      return;
     }
     if (msg.type === "EXECUTE") {
       // Attach thinking/confidence/fieldName/planProgress to action for overlay display

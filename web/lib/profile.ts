@@ -138,7 +138,11 @@ export function profileToContext(profile: UserProfile): Record<string, string> {
   
   // Personal info
   if (profile.firstName) context["first name"] = profile.firstName;
+  // Alias for prompts expecting camelCase keys
+  if (profile.firstName) context["firstName"] = profile.firstName;
   if (profile.lastName) context["last name"] = profile.lastName;
+  // Alias for prompts expecting camelCase keys
+  if (profile.lastName) context["lastName"] = profile.lastName;
   if (profile.fullName) context["full name"] = profile.fullName;
   else context["full name"] = getFullName(profile);
   if (profile.email) context["email"] = profile.email;
@@ -156,13 +160,20 @@ export function profileToContext(profile: UserProfile): Record<string, string> {
     if (profile.address.zipCode) context["zip code"] = profile.address.zipCode;
     if (profile.address.country) context["country"] = profile.address.country;
     context["full address"] = formatAddress(profile);
+    // "Location" is commonly just city/state/country; provide a dedicated key used by prompts.
+    const locParts = [profile.address.city, profile.address.state, profile.address.country].filter(Boolean);
+    if (locParts.length > 0) context["location"] = locParts.join(", ");
   }
   
   // Professional
   if (profile.company) context["current company"] = profile.company;
   if (profile.jobTitle) context["job title"] = profile.jobTitle;
   if (profile.linkedIn) context["linkedin url"] = profile.linkedIn;
+  // Alias for prompts expecting camelCase keys
+  if (profile.linkedIn) context["linkedIn"] = profile.linkedIn;
   if (profile.website) context["website"] = profile.website;
+  // Alias for prompts expecting "portfolio"
+  if (profile.website) context["portfolio"] = profile.website;
   if (profile.github) context["github"] = profile.github;
   
   // Resume data

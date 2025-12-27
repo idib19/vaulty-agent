@@ -766,6 +766,9 @@ async function agentLoop({ jobId, startUrl, mode }) {
   // Track last action/result for state updates
   let lastAction = null;
   let lastResult = null;
+  
+  // Track previous URL for detecting page changes (redirects)
+  let previousUrl = null;
 
   try {
   while (true) {
@@ -831,6 +834,39 @@ async function agentLoop({ jobId, startUrl, mode }) {
     // ============================================================
     applicationState = updateApplicationState(applicationState, observation, lastAction, lastResult);
     await setJob(jobId, { applicationState });
+    
+    // ============================================================
+    // DETECT URL CHANGES AND PREPARE FOR INITIAL VISION CHECK
+    // ============================================================
+    // Normalize URLs for comparison (remove query params and fragments to avoid false positives)
+    // We want to detect actual page changes, not SPA route changes
+    function normalizeUrl(url) {
+      if (!url) return null;
+      try {
+        const urlObj = new URL(url);
+        // Compare origin + pathname (ignore query params, hash, etc.)
+        return `${urlObj.origin}${urlObj.pathname}`;
+      } catch {
+        // If URL parsing fails, use as-is
+        return url.split('?')[0].split('#')[0];
+      }
+    }
+    
+    const currentUrl = observation?.url || null;
+    const normalizedCurrentUrl = normalizeUrl(currentUrl);
+    const normalizedPreviousUrl = normalizeUrl(previousUrl);
+    
+    // URL changed if normalized URLs differ (actual page change/redirect)
+    const urlChanged = previousUrl !== null && 
+                       currentUrl !== null && 
+                       normalizedCurrentUrl !== normalizedPreviousUrl;
+    
+    if (urlChanged) {
+      console.log(`[agent] 🔄 URL changed (redirect detected): ${previousUrl} → ${currentUrl}`);
+    }
+    
+    // Update previous URL for next iteration
+    previousUrl = currentUrl;
     
     // Send state update to HUD for progress display
     try {
@@ -1158,22 +1194,39 @@ async function agentLoop({ jobId, startUrl, mode }) {
     }
     
     // ============================================================
-    // INITIAL VISION BOOTSTRAP (FIRST 2 STEPS)
+    // INITIAL VISION BOOTSTRAP
     // Purpose: 
-    //   Step 1: Lock onto target job on the job board (e.g., ZipRecruiter, Indeed)
-    //   Step 2: Handle redirect to company ATS (e.g., Lever, Greenhouse) where
-    //           there's often another "Apply" button before the actual form
+    //   - First 2 steps: Lock onto target job on the job board (e.g., ZipRecruiter, Indeed)
+    //   - Every URL change: Handle redirects to new pages (e.g., company ATS, login pages)
     // ============================================================
     
     // Only call planner if not using existing plan
     if (!usingExistingPlan) {
       try {
-        const initialVisionStep = job.initialVisionStep || 0;
         const INITIAL_VISION_STEPS = 2; // Do vision for first 2 steps
-        const shouldInitialVision = step <= INITIAL_VISION_STEPS && initialVisionStep < step;
+        const initialVisionStep = job.initialVisionStep || 0;
+        const initialVisionUrls = job.initialVisionUrls || []; // Track URLs that have had initial vision
+        
+        // Unified check: trigger initial vision if we haven't done it for this context yet
+        // Context is either: (1) step number (for first 2 steps) or (2) normalized URL (for redirects)
+        const isFirstTwoSteps = step <= INITIAL_VISION_STEPS;
+        const needsVisionForStep = isFirstTwoSteps && initialVisionStep < step;
+        const needsVisionForUrl = urlChanged && normalizedCurrentUrl && !initialVisionUrls.includes(normalizedCurrentUrl);
+        
+        const shouldInitialVision = needsVisionForStep || needsVisionForUrl;
 
         if (shouldInitialVision) {
-          console.log(`[agent] 👁️ Initial vision bootstrap (step ${step}/${INITIAL_VISION_STEPS}) to ensure we're on the right path...`);
+          // Determine reason for logging
+          let reason;
+          if (needsVisionForStep && needsVisionForUrl) {
+            reason = `step ${step}/${INITIAL_VISION_STEPS} + URL change`;
+          } else if (needsVisionForStep) {
+            reason = `step ${step}/${INITIAL_VISION_STEPS}`;
+          } else {
+            reason = `URL change (redirect to ${normalizedCurrentUrl})`;
+          }
+          
+          console.log(`[agent] 👁️ Initial vision bootstrap (${reason}) to ensure we're on the right path...`);
           const screenshot = await captureScreenshot(tabId);
 
           if (screenshot) {
@@ -1201,8 +1254,17 @@ async function agentLoop({ jobId, startUrl, mode }) {
             });
           }
 
-          // Update the counter so we don't repeat this step's vision
-          await setJob(jobId, { initialVisionStep: step });
+          // Update tracking: mark this step/URL as having had initial vision
+          const updates = {};
+          if (needsVisionForStep) {
+            updates.initialVisionStep = step;
+          }
+          if (needsVisionForUrl && normalizedCurrentUrl) {
+            updates.initialVisionUrls = [...initialVisionUrls, normalizedCurrentUrl];
+          }
+          if (Object.keys(updates).length > 0) {
+            await setJob(jobId, updates);
+          }
         } else {
           // Normal planner call with goal context (or planning request)
           
@@ -1749,8 +1811,34 @@ async function agentLoop({ jobId, startUrl, mode }) {
       }
     }
 
-    // Add delay between actions
-    const delayMs = action.type === "EXTRACT" ? 2000 : 800;
+    // Optimized delays between actions for efficiency
+    let delayMs;
+    switch (action.type) {
+      case "EXTRACT":
+        delayMs = 1500; // Reduced from 2000ms - content script handles waiting
+        break;
+      case "CLICK":
+        delayMs = 200; // Reduced from 800ms - efficient click method
+        break;
+      case "SELECT_CUSTOM":
+        delayMs = 300; // Moderate delay for dropdown operations
+        break;
+      case "FILL":
+        delayMs = 150; // Quick delay for form filling
+        break;
+      case "SELECT":
+      case "CHECK":
+        delayMs = 100; // Very quick for simple interactions
+        break;
+      case "NAVIGATE":
+        delayMs = 500; // Allow navigation to start
+        break;
+      case "WAIT_FOR":
+        delayMs = 50; // Minimal delay when action itself waits
+        break;
+      default:
+        delayMs = 250; // Default reduced delay
+    }
     await sleep(delayMs);
   }
   } finally {
