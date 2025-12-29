@@ -3,6 +3,10 @@ const PROFILE_KEY = "userProfile";
 const SETTINGS_KEY = "agentSettings";
 const LOGS_KEY = "agentLogs";
 const DEFAULT_MAX_STEPS = 40;
+const BATCH_REFRESH_INTERVAL = 2000; // Refresh batch status every 2 seconds
+
+// Track batch refresh interval
+let batchRefreshInterval = null;
 
 // ===== Utility Functions =====
 
@@ -82,6 +86,11 @@ document.querySelectorAll(".tab").forEach(tab => {
     // Auto-refresh logs when switching to logs tab
     if (tab.dataset.tab === "logs") {
       loadLogs();
+    }
+    
+    // Auto-refresh batch dashboard when switching to batch tab
+    if (tab.dataset.tab === "batch") {
+      refreshBatchDashboard();
     }
   });
 });
@@ -922,6 +931,321 @@ function wireLogsUI() {
   }
 }
 
+// ===== Batch Tab =====
+
+/**
+ * Parse URLs from textarea, one per line
+ */
+function parseUrlsFromTextarea(text) {
+  return text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => {
+      if (!line) return false;
+      try {
+        new URL(line);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+}
+
+/**
+ * Update the "Start Batch" button text with URL count
+ */
+function updateBatchButtonText() {
+  const textarea = document.getElementById("batchUrls");
+  const button = document.getElementById("startBatch");
+  if (!textarea || !button) return;
+  
+  const urls = parseUrlsFromTextarea(textarea.value);
+  button.textContent = `🚀 Start Batch (${urls.length} job${urls.length !== 1 ? 's' : ''})`;
+  button.disabled = urls.length === 0;
+}
+
+/**
+ * Render a single job item in the batch jobs list
+ */
+function renderBatchJobItem(jobStatus) {
+  const statusClass = jobStatus.status === 'done' ? 'done' 
+    : jobStatus.status === 'error' || jobStatus.status === 'stopped' ? 'error'
+    : jobStatus.status === 'running' || jobStatus.status === 'waiting_for_user' ? 'running'
+    : 'pending';
+  
+  const title = jobStatus.jobTitle || 'Loading...';
+  const company = jobStatus.company ? ` at ${jobStatus.company}` : '';
+  const displayTitle = title.length > 30 ? title.slice(0, 30) + '...' : title;
+  
+  // Extract domain from URL
+  let domain = '';
+  try {
+    domain = new URL(jobStatus.url).hostname.replace('www.', '');
+  } catch {
+    domain = jobStatus.url?.slice(0, 30) || '';
+  }
+  
+  return `
+    <div class="batch-job-item" data-job-id="${jobStatus.jobId}">
+      <div class="batch-job-status ${statusClass}"></div>
+      <div class="batch-job-info">
+        <div class="batch-job-title" title="${escapeHtml(title)}${company}">${escapeHtml(displayTitle)}${company}</div>
+        <div class="batch-job-url" title="${escapeHtml(jobStatus.url)}">${escapeHtml(domain)}</div>
+      </div>
+      <div class="batch-job-progress">${jobStatus.progress || 0}%</div>
+      <div class="batch-job-phase">${jobStatus.phase || 'pending'}</div>
+      ${statusClass === 'running' ? `
+        <div class="batch-job-actions">
+          <button class="batch-job-btn stop" onclick="stopBatchJob('${jobStatus.jobId}')" title="Stop this job">⏹</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+/**
+ * Update the batch dashboard with current batch status
+ */
+async function refreshBatchDashboard() {
+  try {
+    const response = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: "GET_ACTIVE_BATCH" }, resolve);
+    });
+    
+    const dashboard = document.getElementById("batchDashboard");
+    const startBtn = document.getElementById("startBatch");
+    const stopBtn = document.getElementById("stopBatch");
+    const urlsTextarea = document.getElementById("batchUrls");
+    
+    if (!response?.ok || !response.batch) {
+      // No active batch
+      dashboard?.classList.add("hidden");
+      stopBtn?.classList.add("hidden");
+      startBtn?.classList.remove("hidden");
+      urlsTextarea && (urlsTextarea.disabled = false);
+      clearBatchRefreshInterval();
+      return;
+    }
+    
+    const batch = response.batch;
+    const stats = batch.stats || {};
+    
+    // Show dashboard, hide input
+    dashboard?.classList.remove("hidden");
+    startBtn?.classList.add("hidden");
+    urlsTextarea && (urlsTextarea.disabled = true);
+    
+    // Show/hide stop button based on batch status
+    if (batch.status === 'running') {
+      stopBtn?.classList.remove("hidden");
+    } else {
+      stopBtn?.classList.add("hidden");
+    }
+    
+    // Update stats
+    document.getElementById("batchCompleted").textContent = stats.completed || 0;
+    document.getElementById("batchRunning").textContent = stats.running || 0;
+    document.getElementById("batchFailed").textContent = stats.failed || 0;
+    document.getElementById("batchPending").textContent = stats.pending || 0;
+    
+    // Update progress bar
+    const progress = batch.averageProgress || 0;
+    document.getElementById("batchProgressFill").style.width = `${progress}%`;
+    document.getElementById("batchProgressText").textContent = `${progress}%`;
+    
+    // Update jobs list
+    const jobsList = document.getElementById("batchJobsList");
+    if (jobsList && batch.jobStatuses) {
+      jobsList.innerHTML = batch.jobStatuses.map(renderBatchJobItem).join('');
+    }
+    
+    // Start refresh interval if batch is running
+    if (batch.status === 'running') {
+      startBatchRefreshInterval();
+    } else {
+      clearBatchRefreshInterval();
+    }
+    
+  } catch (e) {
+    console.error("Failed to refresh batch dashboard:", e);
+  }
+}
+
+/**
+ * Start batch jobs
+ */
+async function startBatch() {
+  const textarea = document.getElementById("batchUrls");
+  const slider = document.getElementById("batchMaxConcurrent");
+  
+  const urls = parseUrlsFromTextarea(textarea?.value || '');
+  const maxConcurrent = parseInt(slider?.value || '5', 10);
+  
+  if (urls.length === 0) {
+    showStatusMsg("batchStatus", "Please enter at least one valid URL", false);
+    return;
+  }
+  
+  try {
+    const response = await new Promise(resolve => {
+      chrome.runtime.sendMessage({
+        type: "START_BATCH",
+        urls,
+        mode: 'background',
+        maxConcurrent
+      }, resolve);
+    });
+    
+    if (response?.ok) {
+      showStatusMsg("batchStatus", `Started ${response.totalJobs} jobs (max ${response.maxConcurrent} concurrent)`, true);
+      refreshBatchDashboard();
+      startBatchRefreshInterval();
+    } else {
+      showStatusMsg("batchStatus", response?.error || "Failed to start batch", false);
+    }
+  } catch (e) {
+    showStatusMsg("batchStatus", "Failed to start batch: " + e.message, false);
+  }
+}
+
+/**
+ * Stop all jobs in the current batch
+ */
+async function stopBatch() {
+  try {
+    const response = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: "GET_ACTIVE_BATCH" }, resolve);
+    });
+    
+    if (!response?.ok || !response.batchId) {
+      showStatusMsg("batchStatus", "No active batch to stop", false);
+      return;
+    }
+    
+    const stopResponse = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: "STOP_BATCH", batchId: response.batchId }, resolve);
+    });
+    
+    if (stopResponse?.ok) {
+      showStatusMsg("batchStatus", "Stopping all jobs...", true);
+      refreshBatchDashboard();
+    } else {
+      showStatusMsg("batchStatus", stopResponse?.error || "Failed to stop batch", false);
+    }
+  } catch (e) {
+    showStatusMsg("batchStatus", "Failed to stop batch: " + e.message, false);
+  }
+}
+
+/**
+ * Stop a single job within a batch
+ */
+window.stopBatchJob = async function(jobId) {
+  try {
+    const response = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: "GET_ACTIVE_BATCH" }, resolve);
+    });
+    
+    await new Promise(resolve => {
+      chrome.runtime.sendMessage({
+        type: "STOP_BATCH_JOB",
+        jobId,
+        batchId: response?.batchId
+      }, resolve);
+    });
+    
+    refreshBatchDashboard();
+  } catch (e) {
+    console.error("Failed to stop job:", e);
+  }
+};
+
+/**
+ * Clear the current batch
+ */
+async function clearBatch() {
+  try {
+    await new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: "CLEAR_BATCH" }, resolve);
+    });
+    
+    const textarea = document.getElementById("batchUrls");
+    if (textarea) {
+      textarea.value = '';
+      textarea.disabled = false;
+    }
+    
+    document.getElementById("batchDashboard")?.classList.add("hidden");
+    document.getElementById("startBatch")?.classList.remove("hidden");
+    document.getElementById("stopBatch")?.classList.add("hidden");
+    
+    updateBatchButtonText();
+    showStatusMsg("batchStatus", "Batch cleared", true);
+  } catch (e) {
+    showStatusMsg("batchStatus", "Failed to clear batch: " + e.message, false);
+  }
+}
+
+/**
+ * Start the batch refresh interval
+ */
+function startBatchRefreshInterval() {
+  if (batchRefreshInterval) return;
+  batchRefreshInterval = setInterval(refreshBatchDashboard, BATCH_REFRESH_INTERVAL);
+}
+
+/**
+ * Clear the batch refresh interval
+ */
+function clearBatchRefreshInterval() {
+  if (batchRefreshInterval) {
+    clearInterval(batchRefreshInterval);
+    batchRefreshInterval = null;
+  }
+}
+
+/**
+ * Wire up batch UI event listeners
+ */
+function wireBatchUI() {
+  const textarea = document.getElementById("batchUrls");
+  const slider = document.getElementById("batchMaxConcurrent");
+  const sliderValue = document.getElementById("batchConcurrentValue");
+  const startBtn = document.getElementById("startBatch");
+  const stopBtn = document.getElementById("stopBatch");
+  const clearBtn = document.getElementById("clearBatch");
+  
+  // Update button text when URLs change
+  if (textarea) {
+    textarea.addEventListener("input", updateBatchButtonText);
+  }
+  
+  // Update slider value display
+  if (slider && sliderValue) {
+    slider.addEventListener("input", () => {
+      sliderValue.textContent = slider.value;
+    });
+  }
+  
+  // Start batch button
+  if (startBtn) {
+    startBtn.addEventListener("click", startBatch);
+  }
+  
+  // Stop batch button
+  if (stopBtn) {
+    stopBtn.addEventListener("click", stopBatch);
+  }
+  
+  // Clear batch button
+  if (clearBtn) {
+    clearBtn.addEventListener("click", clearBatch);
+  }
+  
+  // Initial button text update
+  updateBatchButtonText();
+}
+
 // ===== Initialize =====
 
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -943,8 +1267,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   await loadSettings();
   await loadBehavior();
   await loadLogs();
+  await refreshBatchDashboard();
   wireBehaviorUI();
   wireLogsUI();
+  wireBatchUI();
   
   // Prefill URL from current tab if no URL is set
   const urlInput = document.getElementById("url");

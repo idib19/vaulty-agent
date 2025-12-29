@@ -5,7 +5,348 @@ const LOGS_KEY = "agentLogs";
 const DEFAULT_MAX_STEPS = 40;
 const MAX_LOGS = 200; // Keep last 200 log entries
 
+// ============================================================
+// BATCH / MULTI-TAB CONFIGURATION
+// ============================================================
+const BATCH_KEY = "activeBatch";
+const DEFAULT_MAX_CONCURRENT_TABS = 5;
+const DEFAULT_MAX_CONCURRENT_LLM = 3;
+const MAX_CONCURRENT_TABS_LIMIT = 10; // Hard cap
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ============================================================
+// LLM RATE LIMITER (Semaphore Pattern)
+// ============================================================
+class Semaphore {
+  constructor(maxConcurrent) {
+    this.maxConcurrent = maxConcurrent;
+    this.current = 0;
+    this.queue = [];
+  }
+
+  async acquire() {
+    if (this.current < this.maxConcurrent) {
+      this.current++;
+      return;
+    }
+    
+    // Wait in queue
+    return new Promise((resolve) => {
+      this.queue.push(resolve);
+    });
+  }
+
+  release() {
+    this.current--;
+    if (this.queue.length > 0) {
+      this.current++;
+      const next = this.queue.shift();
+      next();
+    }
+  }
+
+  async run(fn) {
+    await this.acquire();
+    try {
+      return await fn();
+    } finally {
+      this.release();
+    }
+  }
+}
+
+// Global LLM rate limiter
+let llmSemaphore = new Semaphore(DEFAULT_MAX_CONCURRENT_LLM);
+
+// Update semaphore when settings change
+function updateLLMConcurrency(maxConcurrent) {
+  const validated = Math.max(1, Math.min(10, maxConcurrent || DEFAULT_MAX_CONCURRENT_LLM));
+  llmSemaphore = new Semaphore(validated);
+  console.log(`[batch] LLM concurrency updated to ${validated}`);
+}
+
+// ============================================================
+// BATCH STATE MANAGEMENT
+// ============================================================
+
+function generateBatchId() {
+  return 'batch_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function generateJobId() {
+  return Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
+async function setBatch(batchId, patch) {
+  const key = `batch:${batchId}`;
+  const cur = (await chrome.storage.local.get([key]))[key] || {};
+  const updated = { ...cur, ...patch, updatedAt: new Date().toISOString() };
+  await chrome.storage.local.set({ [key]: updated });
+  return updated;
+}
+
+async function getBatch(batchId) {
+  const key = `batch:${batchId}`;
+  const data = await chrome.storage.local.get([key]);
+  return data[key] || null;
+}
+
+async function setActiveBatch(batchId) {
+  await chrome.storage.local.set({ [BATCH_KEY]: batchId });
+}
+
+async function getActiveBatch() {
+  const { [BATCH_KEY]: batchId } = await chrome.storage.local.get([BATCH_KEY]);
+  return batchId || null;
+}
+
+async function updateBatchProgress(batchId) {
+  const batch = await getBatch(batchId);
+  if (!batch || !batch.jobIds) return null;
+  
+  // Aggregate stats from all jobs
+  let completed = 0;
+  let running = 0;
+  let failed = 0;
+  let pending = 0;
+  let totalProgress = 0;
+  
+  const jobStatuses = [];
+  
+  for (const jobId of batch.jobIds) {
+    const job = await getJob(jobId);
+    if (!job) continue;
+    
+    const status = job.status || 'pending';
+    const progress = job.applicationState?.progress?.estimatedProgress || 0;
+    
+    if (status === 'done') {
+      completed++;
+      totalProgress += 100;
+    } else if (status === 'error' || status === 'stopped') {
+      failed++;
+      totalProgress += progress; // Count partial progress
+    } else if (status === 'running' || status === 'waiting_for_user' || status === 'paused_for_approval') {
+      running++;
+      totalProgress += progress;
+    } else {
+      pending++;
+    }
+    
+    jobStatuses.push({
+      jobId,
+      status,
+      progress,
+      url: job.startUrl,
+      step: job.step || 0,
+      phase: job.applicationState?.progress?.phase || 'pending',
+      jobTitle: job.applicationState?.goal?.jobTitle,
+      company: job.applicationState?.goal?.company,
+      error: job.error
+    });
+  }
+  
+  const totalJobs = batch.jobIds.length;
+  const averageProgress = totalJobs > 0 ? Math.round(totalProgress / totalJobs) : 0;
+  const isComplete = completed + failed >= totalJobs;
+  
+  const updatedBatch = await setBatch(batchId, {
+    stats: { completed, running, failed, pending, totalJobs },
+    averageProgress,
+    status: isComplete ? 'completed' : 'running',
+    jobStatuses
+  });
+  
+  return updatedBatch;
+}
+
+// ============================================================
+// BATCH ORCHESTRATOR
+// ============================================================
+
+/**
+ * Run tasks with concurrency limit
+ * @param {Array} items - Items to process
+ * @param {number} maxConcurrent - Max concurrent tasks
+ * @param {Function} fn - Async function to run for each item
+ */
+async function runWithConcurrency(items, maxConcurrent, fn) {
+  const results = [];
+  const executing = new Set();
+  
+  for (const item of items) {
+    const promise = fn(item).then(result => {
+      executing.delete(promise);
+      return result;
+    }).catch(error => {
+      executing.delete(promise);
+      console.error('[batch] Task failed:', error);
+      return { error: String(error) };
+    });
+    
+    executing.add(promise);
+    results.push(promise);
+    
+    if (executing.size >= maxConcurrent) {
+      await Promise.race(executing);
+    }
+  }
+  
+  return Promise.all(results);
+}
+
+/**
+ * Start multiple job applications in parallel
+ * @param {Object} options
+ * @param {string[]} options.urls - Array of job URLs to apply to
+ * @param {string} options.mode - 'live' or 'background'
+ * @param {number} options.maxConcurrent - Max concurrent tabs (default 5)
+ */
+async function startBatchJobs({ urls, mode = 'background', maxConcurrent = DEFAULT_MAX_CONCURRENT_TABS }) {
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return { ok: false, error: 'No URLs provided' };
+  }
+  
+  // Validate and filter URLs
+  const validUrls = urls
+    .map(u => u.trim())
+    .filter(u => {
+      if (!u) return false;
+      try {
+        new URL(u);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  
+  if (validUrls.length === 0) {
+    return { ok: false, error: 'No valid URLs provided' };
+  }
+  
+  // Cap concurrent tabs
+  const cappedConcurrent = Math.min(
+    Math.max(1, maxConcurrent),
+    MAX_CONCURRENT_TABS_LIMIT
+  );
+  
+  const batchId = generateBatchId();
+  const jobIds = validUrls.map(() => generateJobId());
+  
+  console.log(`[batch] Starting batch ${batchId} with ${validUrls.length} jobs, max ${cappedConcurrent} concurrent`);
+  
+  // Create batch record
+  await setBatch(batchId, {
+    status: 'starting',
+    jobIds,
+    urls: validUrls,
+    mode,
+    maxConcurrent: cappedConcurrent,
+    createdAt: new Date().toISOString(),
+    stats: {
+      completed: 0,
+      running: 0,
+      failed: 0,
+      pending: validUrls.length,
+      totalJobs: validUrls.length
+    },
+    averageProgress: 0
+  });
+  
+  await setActiveBatch(batchId);
+  
+  // Create initial job records
+  for (let i = 0; i < validUrls.length; i++) {
+    await setJob(jobIds[i], {
+      status: 'pending',
+      batchId,
+      startUrl: validUrls[i],
+      mode,
+      step: 0
+    });
+  }
+  
+  // Update batch to running
+  await setBatch(batchId, { status: 'running' });
+  
+  // Start jobs with concurrency limit
+  const jobs = validUrls.map((url, i) => ({
+    jobId: jobIds[i],
+    url,
+    batchId
+  }));
+  
+  // Run in parallel with limit (don't await - let them run in background)
+  runWithConcurrency(jobs, cappedConcurrent, async (job) => {
+    console.log(`[batch] Starting job ${job.jobId} for ${job.url}`);
+    
+    try {
+      await agentLoop({
+        jobId: job.jobId,
+        startUrl: job.url,
+        mode,
+        batchId: job.batchId
+      });
+    } catch (e) {
+      console.error(`[batch] Job ${job.jobId} failed:`, e);
+      await setJob(job.jobId, { status: 'error', error: String(e) });
+    }
+    
+    // Update batch progress after each job completes
+    await updateBatchProgress(batchId);
+  }).then(() => {
+    console.log(`[batch] Batch ${batchId} completed all jobs`);
+    setBatch(batchId, { status: 'completed' });
+  });
+  
+  return {
+    ok: true,
+    batchId,
+    jobIds,
+    totalJobs: validUrls.length,
+    maxConcurrent: cappedConcurrent
+  };
+}
+
+/**
+ * Stop all jobs in a batch
+ */
+async function stopBatch(batchId) {
+  const batch = await getBatch(batchId);
+  if (!batch) {
+    return { ok: false, error: 'Batch not found' };
+  }
+  
+  console.log(`[batch] Stopping batch ${batchId} (${batch.jobIds?.length || 0} jobs)`);
+  
+  // Stop all jobs in the batch
+  for (const jobId of (batch.jobIds || [])) {
+    await setJob(jobId, { stop: true, status: 'stopping' });
+  }
+  
+  await setBatch(batchId, { status: 'stopping' });
+  
+  return { ok: true, batchId };
+}
+
+/**
+ * Get status of all jobs in a batch
+ */
+async function getBatchStatus(batchId) {
+  const batch = await getBatch(batchId);
+  if (!batch) {
+    return { ok: false, error: 'Batch not found' };
+  }
+  
+  // Update progress before returning
+  const updatedBatch = await updateBatchProgress(batchId);
+  
+  return {
+    ok: true,
+    batch: updatedBatch || batch
+  };
+}
 
 // Track pending user responses and paused state
 const pendingUserResponses = new Map(); // actionId -> { resolve, reject }
@@ -689,7 +1030,7 @@ function createLoopAskUserAction(loopInfo) {
   };
 }
 
-async function agentLoop({ jobId, startUrl, mode }) {
+async function agentLoop({ jobId, startUrl, mode, batchId = null }) {
   let tabId;
   
   // Check if we're resuming an existing job
@@ -699,7 +1040,9 @@ async function agentLoop({ jobId, startUrl, mode }) {
     // Restore startUrl from existing job if not provided
     startUrl = existingJob.startUrl || startUrl;
   } else {
-    tabId = await createTab(startUrl, mode);
+    // For batch mode, always create tabs in background
+    const tabMode = batchId ? 'background' : mode;
+    tabId = await createTab(startUrl, tabMode);
   }
   
   let step = existingJob.step || 0;
@@ -718,7 +1061,8 @@ async function agentLoop({ jobId, startUrl, mode }) {
     stop: false, 
     actionHistory,
     startUrl,  // Persist the URL for continue/resume
-    currentPlan: existingJob.currentPlan || null // Multi-step plan for form filling
+    currentPlan: existingJob.currentPlan || null, // Multi-step plan for form filling
+    batchId: batchId || existingJob.batchId || null // Track batch association
   });
 
   // Register this tab for new tab detection (Apply buttons opening new tabs)
@@ -1230,28 +1574,33 @@ async function agentLoop({ jobId, startUrl, mode }) {
           const screenshot = await captureScreenshot(tabId);
 
           if (screenshot) {
-            plannerResponse = await postJSON(`${apiBase}/api/agent/next`, {
-              jobId,
-              step,
-              mode,
-              observation,
-              profile,
-            actionHistory: actionHistory.slice(-10), // Rich conversation history
-            applicationState,
-            screenshot: screenshot,
-            initialVision: true
-          });
+            // Use semaphore for rate limiting LLM calls (especially in batch mode)
+            plannerResponse = await llmSemaphore.run(() => 
+              postJSON(`${apiBase}/api/agent/next`, {
+                jobId,
+                step,
+                mode,
+                observation,
+                profile,
+                actionHistory: actionHistory.slice(-10), // Rich conversation history
+                applicationState,
+                screenshot: screenshot,
+                initialVision: true
+              })
+            );
           } else {
             console.log(`[agent] ⚠️ Initial vision screenshot failed; falling back to text planner`);
-            plannerResponse = await postJSON(`${apiBase}/api/agent/next`, {
-              jobId,
-              step,
-              mode,
-              observation,
-              profile,
-              actionHistory: actionHistory.slice(-10), // Rich conversation history
-              applicationState
-            });
+            plannerResponse = await llmSemaphore.run(() =>
+              postJSON(`${apiBase}/api/agent/next`, {
+                jobId,
+                step,
+                mode,
+                observation,
+                profile,
+                actionHistory: actionHistory.slice(-10), // Rich conversation history
+                applicationState
+              })
+            );
           }
 
           // Update tracking: mark this step/URL as having had initial vision
@@ -1281,17 +1630,20 @@ async function agentLoop({ jobId, startUrl, mode }) {
             }
           }
           
-          plannerResponse = await postJSON(`${apiBase}/api/agent/next`, {
-            jobId,
-            step,
-            mode,
-            observation,
-            profile,
-            actionHistory: actionHistory.slice(-10), // Rich conversation history
-            applicationState,
-            requestPlan: shouldRequestPlan, // Request multi-step plan when appropriate
-            screenshot: planScreenshot // Include screenshot for vision-enhanced planning
-          });
+          // Use semaphore for rate limiting LLM calls (especially in batch mode)
+          plannerResponse = await llmSemaphore.run(() =>
+            postJSON(`${apiBase}/api/agent/next`, {
+              jobId,
+              step,
+              mode,
+              observation,
+              profile,
+              actionHistory: actionHistory.slice(-10), // Rich conversation history
+              applicationState,
+              requestPlan: shouldRequestPlan, // Request multi-step plan when appropriate
+              screenshot: planScreenshot // Include screenshot for vision-enhanced planning
+            })
+          );
           
           // If we got a plan back, store it for future steps
           if (plannerResponse.plan && plannerResponse.plan.plan && plannerResponse.plan.plan.length > 0) {
@@ -1363,23 +1715,26 @@ async function agentLoop({ jobId, startUrl, mode }) {
         // Re-call the planner with the screenshot for vision mode
         try {
           const visionStartTime = Date.now();
-          const visionPlan = await postJSON(`${apiBase}/api/agent/next`, {
-            jobId,
-            step,
-            mode,
-            observation,
-            profile,
-            actionHistory: actionHistory.slice(-10), // Rich conversation history
-            applicationState, // IMPORTANT: keep goal context in vision mode too
-            screenshot: screenshot,
-            loopContext: {
-              isLoop: true,
-              failedAction: loopInfo.failedAction,
-              failCount: loopInfo.failCount,
-              error: loopInfo.error,
-              suggestedAlternatives: loopInfo.suggestedAlternatives
-            }
-          });
+          // Use semaphore for rate limiting LLM calls (especially in batch mode)
+          const visionPlan = await llmSemaphore.run(() =>
+            postJSON(`${apiBase}/api/agent/next`, {
+              jobId,
+              step,
+              mode,
+              observation,
+              profile,
+              actionHistory: actionHistory.slice(-10), // Rich conversation history
+              applicationState, // IMPORTANT: keep goal context in vision mode too
+              screenshot: screenshot,
+              loopContext: {
+                isLoop: true,
+                failedAction: loopInfo.failedAction,
+                failCount: loopInfo.failCount,
+                error: loopInfo.error,
+                suggestedAlternatives: loopInfo.suggestedAlternatives
+              }
+            })
+          );
           const visionDuration = Date.now() - visionStartTime;
           
           console.log(`[vision-flow] ✅ Vision analysis completed in ${visionDuration}ms`);
@@ -1943,6 +2298,65 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       if (msg.type === "CLEAR_LOGS") {
         await chrome.storage.local.set({ [LOGS_KEY]: [] });
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ============================================================
+      // BATCH MESSAGE HANDLERS
+      // ============================================================
+
+      // Start a batch of jobs
+      if (msg.type === "START_BATCH") {
+        const result = await startBatchJobs({
+          urls: msg.urls,
+          mode: msg.mode || 'background',
+          maxConcurrent: msg.maxConcurrent || DEFAULT_MAX_CONCURRENT_TABS
+        });
+        sendResponse(result);
+        return;
+      }
+
+      // Stop all jobs in a batch
+      if (msg.type === "STOP_BATCH") {
+        const result = await stopBatch(msg.batchId);
+        sendResponse(result);
+        return;
+      }
+
+      // Get batch status
+      if (msg.type === "GET_BATCH_STATUS") {
+        const result = await getBatchStatus(msg.batchId);
+        sendResponse(result);
+        return;
+      }
+
+      // Get active batch ID
+      if (msg.type === "GET_ACTIVE_BATCH") {
+        const batchId = await getActiveBatch();
+        if (batchId) {
+          const batch = await getBatch(batchId);
+          sendResponse({ ok: true, batchId, batch });
+        } else {
+          sendResponse({ ok: true, batchId: null, batch: null });
+        }
+        return;
+      }
+
+      // Stop a single job within a batch
+      if (msg.type === "STOP_BATCH_JOB") {
+        await setJob(msg.jobId, { stop: true, status: 'stopping' });
+        // Update batch progress
+        if (msg.batchId) {
+          await updateBatchProgress(msg.batchId);
+        }
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // Clear active batch
+      if (msg.type === "CLEAR_BATCH") {
+        await chrome.storage.local.remove([BATCH_KEY]);
         sendResponse({ ok: true });
         return;
       }

@@ -261,3 +261,269 @@ hr { border: none; border-top: 1px solid #eee; margin: 14px 0; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ============================================================
+   BATCH TAB STYLES
+   ============================================================ */
+
+.batch-textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.batch-settings {
+  margin: 12px 0;
+}
+
+.batch-setting {
+  margin-bottom: 8px;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #e5e5e5;
+  border-radius: 3px;
+  outline: none;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  background: #4F46E5;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.slider::-webkit-slider-thumb:hover {
+  background: #4338CA;
+}
+
+.slider-value {
+  min-width: 24px;
+  text-align: center;
+  font-weight: 600;
+  color: #4F46E5;
+  font-size: 14px;
+}
+
+.batch-btn {
+  background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+}
+
+.batch-btn:hover {
+  background: linear-gradient(135deg, #4338CA 0%, #6D28D9 100%);
+}
+
+/* Batch Dashboard */
+.batch-dashboard {
+  margin-top: 12px;
+}
+
+.batch-stats {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.batch-stat {
+  flex: 1;
+  text-align: center;
+  padding: 10px 6px;
+  background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+  border-radius: 8px;
+  border: 1px solid #6EE7B7;
+}
+
+.batch-stat.running {
+  background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+  border-color: #93C5FD;
+}
+
+.batch-stat.failed {
+  background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+  border-color: #FCA5A5;
+}
+
+.batch-stat.pending {
+  background: linear-gradient(135deg, #F3F4F6 0%, #E5E7EB 100%);
+  border-color: #D1D5DB;
+}
+
+.batch-stat-value {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  color: #065F46;
+}
+
+.batch-stat.running .batch-stat-value { color: #1D4ED8; }
+.batch-stat.failed .batch-stat-value { color: #DC2626; }
+.batch-stat.pending .batch-stat-value { color: #6B7280; }
+
+.batch-stat-label {
+  display: block;
+  font-size: 10px;
+  color: #059669;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.batch-stat.running .batch-stat-label { color: #3B82F6; }
+.batch-stat.failed .batch-stat-label { color: #EF4444; }
+.batch-stat.pending .batch-stat-label { color: #9CA3AF; }
+
+/* Progress Bar */
+.batch-progress-bar {
+  height: 8px;
+  background: #E5E7EB;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.batch-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4F46E5 0%, #7C3AED 50%, #10B981 100%);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.batch-progress-text {
+  text-align: center;
+  font-size: 11px;
+  color: #666;
+  margin-bottom: 12px;
+}
+
+.batch-progress-text span {
+  font-weight: 600;
+  color: #4F46E5;
+}
+
+/* Jobs List */
+.batch-jobs-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.batch-job-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 11px;
+}
+
+.batch-job-item:last-child {
+  border-bottom: none;
+}
+
+.batch-job-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.batch-job-status.pending { background: #9CA3AF; }
+.batch-job-status.running { background: #3B82F6; animation: pulse 1.5s infinite; }
+.batch-job-status.done { background: #10B981; }
+.batch-job-status.error { background: #EF4444; }
+.batch-job-status.stopped { background: #F59E0B; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.batch-job-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.batch-job-title {
+  font-weight: 500;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-job-url {
+  font-size: 10px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.batch-job-progress {
+  width: 50px;
+  text-align: right;
+  font-weight: 500;
+  color: #4F46E5;
+}
+
+.batch-job-phase {
+  font-size: 9px;
+  color: #888;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  background: #f0f0f0;
+  border-radius: 3px;
+}
+
+.batch-job-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.batch-job-btn {
+  padding: 3px 6px;
+  font-size: 10px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.batch-job-btn:hover {
+  background: #f5f5f5;
+}
+
+.batch-job-btn.stop {
+  border-color: #FCA5A5;
+  color: #DC2626;
+}
+
+.batch-job-btn.stop:hover {
+  background: #FEE2E2;
+}
+
+/* Empty state */
+.batch-empty {
+  padding: 20px;
+  text-align: center;
+  color: #888;
+  font-size: 12px;
+}

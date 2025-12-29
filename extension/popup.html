@@ -10,6 +10,7 @@
       <!-- Tab Navigation -->
       <div class="tabs">
         <button class="tab active" data-tab="agent">Agent</button>
+        <button class="tab" data-tab="batch">Batch</button>
         <button class="tab" data-tab="logs">Logs</button>
         <button class="tab" data-tab="profile">Profile</button>
         <button class="tab" data-tab="behavior">Behavior</button>
@@ -63,6 +64,71 @@
           <input id="otp" class="input" placeholder="Enter OTP / Code" />
           <button id="sendOtp" class="btn">Send Code</button>
         </div>
+      </div>
+
+      <!-- Batch Tab -->
+      <div id="tab-batch" class="tab-content">
+        <div class="section-title">🚀 Batch Apply</div>
+        <p class="hint">Apply to multiple jobs simultaneously. Paste one URL per line.</p>
+        
+        <label class="label">Job URLs (one per line)</label>
+        <textarea id="batchUrls" class="input batch-textarea" placeholder="https://example.com/jobs/1
+https://example.com/jobs/2
+https://example.com/jobs/3
+..."></textarea>
+
+        <div class="batch-settings">
+          <div class="batch-setting">
+            <label class="label">Max Concurrent Tabs</label>
+            <div class="slider-row">
+              <input type="range" id="batchMaxConcurrent" min="1" max="10" value="5" class="slider" />
+              <span id="batchConcurrentValue" class="slider-value">5</span>
+            </div>
+            <p class="hint">More tabs = faster but uses more resources</p>
+          </div>
+        </div>
+
+        <button id="startBatch" class="btn batch-btn">🚀 Start Batch (0 jobs)</button>
+        <button id="stopBatch" class="btn secondary hidden">⏹ Stop All</button>
+
+        <hr />
+
+        <!-- Batch Progress Dashboard -->
+        <div id="batchDashboard" class="batch-dashboard hidden">
+          <div class="batch-stats">
+            <div class="batch-stat">
+              <span class="batch-stat-value" id="batchCompleted">0</span>
+              <span class="batch-stat-label">Completed</span>
+            </div>
+            <div class="batch-stat running">
+              <span class="batch-stat-value" id="batchRunning">0</span>
+              <span class="batch-stat-label">Running</span>
+            </div>
+            <div class="batch-stat failed">
+              <span class="batch-stat-value" id="batchFailed">0</span>
+              <span class="batch-stat-label">Failed</span>
+            </div>
+            <div class="batch-stat pending">
+              <span class="batch-stat-value" id="batchPending">0</span>
+              <span class="batch-stat-label">Pending</span>
+            </div>
+          </div>
+
+          <div class="batch-progress-bar">
+            <div class="batch-progress-fill" id="batchProgressFill" style="width: 0%"></div>
+          </div>
+          <div class="batch-progress-text">
+            <span id="batchProgressText">0%</span> average progress
+          </div>
+
+          <div class="batch-jobs-list" id="batchJobsList">
+            <!-- Jobs will be dynamically inserted here -->
+          </div>
+
+          <button id="clearBatch" class="btn secondary">Clear Batch</button>
+        </div>
+
+        <div id="batchStatus" class="status-msg"></div>
       </div>
 
       <!-- Logs Tab -->
