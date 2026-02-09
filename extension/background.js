@@ -134,11 +134,37 @@ async function bringToFront(tabId) {
 function isSubmitLike(action) {
   if (!action || action.type !== "CLICK") return false;
   const t = action.target;
-  if (t?.by === "text") {
+  if (t?.by === "text" && t.text) {
     const s = (t.text || "").toLowerCase();
     return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => s.includes(k));
   }
+  if (t?.by === "intent" && t.intent) {
+    const s = String(t.intent).toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => s.includes(k));
+  }
   return false;
+}
+
+function describeTarget(target) {
+  if (!target) return "";
+  return target.text ||
+    target.selector ||
+    target.label ||
+    target.id ||
+    target.intent ||
+    (target.index !== undefined ? `index ${target.index}` : "") ||
+    "";
+}
+
+function getTargetText(target, observation) {
+  if (!target) return "";
+  if (target.text) return target.text;
+  if (target.by === "vaultyId" && observation?.candidates?.length) {
+    const candidate = observation.candidates.find(c => c.vaultyId === target.id);
+    return candidate?.text || candidate?.label || candidate?.ariaLabel || "";
+  }
+  if (target.intent) return target.intent;
+  return "";
 }
 
 function looksSubmitted(observation) {
@@ -341,9 +367,7 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
   
   // Track filled fields
   if (lastAction?.type === 'FILL' && lastResult?.ok) {
-    const fieldId = lastAction.target?.selector || 
-                    lastAction.target?.text || 
-                    (lastAction.target?.index !== undefined ? `index-${lastAction.target.index}` : null);
+    const fieldId = describeTarget(lastAction.target) || null;
     if (fieldId && !newState.progress.fieldsFilledThisPage.includes(fieldId)) {
       newState.progress.fieldsFilledThisPage.push(fieldId);
     }
@@ -351,9 +375,7 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
   
   // Track success/failure patterns
   if (lastAction && lastResult) {
-    const targetDesc = lastAction.target?.text || 
-                       lastAction.target?.selector || 
-                       (lastAction.target?.index !== undefined ? `index-${lastAction.target.index}` : '');
+    const targetDesc = describeTarget(lastAction.target);
     const pattern = `${lastAction.type} on "${targetDesc}"`;
     
     if (lastResult.ok) {
@@ -498,17 +520,14 @@ function detectLoop(actionHistory, currentObservation) {
     // Also check if the target is similar (for CLICK/FILL actions)
     let targetsSimilar = true;
     if (failed[0].action.target) {
-      const targets = failed.map(f => {
-        const t = f.action.target;
-        return t?.text || t?.selector || t?.index?.toString() || "";
-      });
+      const targets = failed.map(f => describeTarget(f.action.target));
       targetsSimilar = targets.every(t => t === targets[0]);
       console.log(`[loop-detection] Targets similar? ${targetsSimilar} (targets: ${targets.join(", ")})`);
     }
     
     if (allSameType && targetsSimilar) {
       const failedAction = failed[0].action;
-      const targetDesc = failedAction.target?.text || failedAction.target?.selector || `index ${failedAction.target?.index}` || "unknown";
+      const targetDesc = describeTarget(failedAction.target) || "unknown";
       
       console.log(`[loop-detection] ✅ LOOP DETECTED: ${failedAction.type} "${targetDesc}" failed ${failed.length} times`);
       
@@ -562,9 +581,9 @@ function detectLoop(actionHistory, currentObservation) {
     
     if (allOnSamePage && allClicks && limitedTargetVariety) {
       const lastAction = recentForSemantic[recentForSemantic.length - 1].action;
-      const targetDesc = lastAction?.target?.text || `index ${lastAction?.target?.index}` || "unknown";
+      const targetDesc = describeTarget(lastAction?.target) || "unknown";
       const clickedIndex = lastAction?.target?.index;
-      const clickedText = lastAction?.target?.text?.toLowerCase();
+      const clickedText = getTargetText(lastAction?.target, currentObservation).toLowerCase();
       
       console.log(`[loop-detection] ✅ SEMANTIC LOOP DETECTED: Stuck clicking on same page without progress`);
       
@@ -591,10 +610,7 @@ function detectLoop(actionHistory, currentObservation) {
     
     if (fillActions.length >= 3) {
       // Check if all FILL actions target the same field
-      const fillTargets = fillActions.map(h => {
-        const t = h.action?.target;
-        return t?.selector || t?.id || t?.index?.toString() || '';
-      });
+      const fillTargets = fillActions.map(h => describeTarget(h.action?.target));
       const uniqueFillTargets = [...new Set(fillTargets)];
       
       console.log(`[loop-detection] Fill check: ${fillActions.length} FILL actions, targets: ${uniqueFillTargets.join(', ')}`);
@@ -602,7 +618,7 @@ function detectLoop(actionHistory, currentObservation) {
       // If 3+ FILLs on the same target
       if (uniqueFillTargets.length === 1 && uniqueFillTargets[0] !== '') {
         const lastFill = fillActions[fillActions.length - 1].action;
-        const targetDesc = lastFill?.target?.selector || lastFill?.target?.id || `index ${lastFill?.target?.index}` || "unknown";
+        const targetDesc = describeTarget(lastFill?.target) || "unknown";
         
         console.log(`[loop-detection] ✅ FILL LOOP DETECTED: Repeatedly filling "${targetDesc}" (${fillActions.length} times)`);
         
@@ -1630,8 +1646,7 @@ async function agentLoop({ jobId, startUrl, mode }) {
         thinking: thinking?.slice(0, 200) || "",
         action: {
           type: action.type,
-          target: action.target?.text || action.target?.selector || 
-                  action.target?.label || (action.target?.index !== undefined ? `index ${action.target.index}` : ""),
+          target: describeTarget(action.target),
           value: action.value?.slice(0, 50)
         },
         result: { ok: false, error: String(e).slice(0, 100) },
@@ -1663,8 +1678,7 @@ async function agentLoop({ jobId, startUrl, mode }) {
       action: {
         type: action.type,
         // Human-readable target description
-        target: action.target?.text || action.target?.selector || 
-                action.target?.label || (action.target?.index !== undefined ? `index ${action.target.index}` : ""),
+        target: describeTarget(action.target),
         value: action.value?.slice(0, 50) // For FILL actions
       },
       result: exec?.result || { ok: true },

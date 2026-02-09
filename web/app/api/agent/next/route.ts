@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
       buttons: body.observation.buttons || [],
       pageContext: body.observation.pageContext || body.observation.text || "",
       specialElements: body.observation.specialElements,
+      candidates: body.observation.candidates || [],
+      registryVersion: body.observation.registryVersion,
     };
     
     // Use provided profile or empty
@@ -343,6 +345,8 @@ export async function POST(request: NextRequest) {
     const targetInfo = actionWithTarget.target 
       ? ((actionWithTarget.target as { text?: string }).text || 
          (actionWithTarget.target as { selector?: string }).selector || 
+         (actionWithTarget.target as { id?: string }).id ||
+         (actionWithTarget.target as { intent?: string }).intent ||
          `index ${(actionWithTarget.target as { index?: number }).index}`)
       : "none";
     
@@ -362,10 +366,10 @@ export async function POST(request: NextRequest) {
     const forceLive = 
       action.type === "REQUEST_VERIFICATION" ||
       action.type === "ASK_USER" ||
-      (action.type === "CLICK" && isSubmitLike(action));
+      (action.type === "CLICK" && isSubmitLike(action, observation));
     
     // Add approval requirement for submit-like actions
-    if (action.type === "CLICK" && isSubmitLike(action)) {
+    if (action.type === "CLICK" && isSubmitLike(action, observation)) {
       action.requiresApproval = true;
     }
     
@@ -394,11 +398,20 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function isSubmitLike(action: AgentAction): boolean {
+function isSubmitLike(action: AgentAction, observation?: PageObservation): boolean {
   if (action.type !== "CLICK") return false;
   const target = action.target;
-  if ("text" in target) {
+  if ("text" in target && target.text) {
     const text = target.text.toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => text.includes(k));
+  }
+  if (target.by === "intent" && typeof target.intent === "string") {
+    const intent = target.intent.toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => intent.includes(k));
+  }
+  if (target.by === "vaultyId" && observation?.candidates?.length) {
+    const candidate = observation.candidates.find(c => c.vaultyId === target.id);
+    const text = (candidate?.text || candidate?.label || candidate?.ariaLabel || "").toLowerCase();
     return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => text.includes(k));
   }
   return false;

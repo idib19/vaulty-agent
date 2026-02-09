@@ -136,6 +136,28 @@ export interface FormButton {
   context?: ElementContext;
 }
 
+// Candidate registry element (executor v2)
+export interface CandidateElement {
+  vaultyId: string;
+  type: string;
+  role?: string;
+  text?: string;
+  label?: string;
+  placeholder?: string;
+  ariaLabel?: string;
+  attributes?: {
+    id?: string | null;
+    name?: string | null;
+    dataTestId?: string | null;
+    type?: string | null;
+  };
+  context?: ElementContext;
+  formId?: string | null;
+  sectionHeading?: string | null;
+  isVisible?: boolean;
+  isEnabled?: boolean;
+}
+
 // Special elements detected on the page
 export interface SpecialElements {
   hasCaptcha?: boolean;
@@ -160,5 +182,8 @@ export interface PageObservation {
   // Modal awareness
   hasActiveModal?: boolean;
   modalTitle?: string | null;
+  // Candidate registry (executor v2)
+  candidates?: CandidateElement[];
+  registryVersion?: number;
 }
 

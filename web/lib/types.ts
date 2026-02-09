@@ -1,9 +1,11 @@
 import type { UserProfile } from "./profile";
-import type { FormField, FormButton } from "./llm/types";
+import type { FormField, FormButton, CandidateElement } from "./llm/types";
 
 export type AgentMode = "live" | "background";
 
 export type Target =
+  | { by: "vaultyId"; id: string; text?: string; intent?: string }
+  | { by: "intent"; intent: string; role?: string; text?: { exact?: string; contains?: string[] } | string; label?: string; attributes?: { id?: string; name?: string; dataTestId?: string }; context?: { form?: string; section?: string; modalTitle?: string }; constraints?: { mustBeVisible?: boolean; mustBeEnabled?: boolean; mustBeTopmost?: boolean }; fallbacks?: string[]; confidence?: number }
   | { by: "role"; role: string; name?: string }
   | { by: "label"; text: string }
   | { by: "text"; text: string; exact?: boolean }
@@ -40,6 +42,7 @@ export type AgentAction =
   | { type: "EXTRACT"; target?: Target; mode: "visibleText" | "html" | "fields" }
   | { type: "UPLOAD_FILE"; target: Target; fileType?: "resume" }
   | { type: "REQUEST_VERIFICATION"; kind: VerificationKind; context?: Record<string, unknown> }
+  | { type: "REFRESH_REGISTRY" }
   | AskUserAction
   | { type: "DONE"; summary: string };
 
@@ -62,6 +65,8 @@ export type Observation = {
   buttons?: FormButton[];
   pageContext?: string;
   specialElements?: SpecialElements;
+  candidates?: CandidateElement[];
+  registryVersion?: number;
 };
 
 // Action history for context
