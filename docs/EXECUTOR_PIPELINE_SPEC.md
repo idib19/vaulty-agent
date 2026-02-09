@@ -289,12 +289,16 @@ Phase 3:
 - Add resolver tuning based on telemetry.
 
 
-## Open Questions
+## Decisions (from product direction)
 
-- Should vaultyId be stable across registry rebuilds?
-  - Suggest using a stable hash of attributes (id, name, text, role).
-- How much of the registry should be sent to the planner?
-  - Suggest a cap (e.g., top 80 candidates) and only send minimal fields.
-- Should the planner be allowed to request a registry refresh?
-  - Consider a new action: REFRESH_REGISTRY.
+- vaultyId must be stable across registry rebuilds.
+  - Use the element's `id` attribute as the primary stable key.
+  - If no `id` is present, fall back to a deterministic hash of
+    (name, text, role, data-testid, aria-label).
+  - New elements introduced after a rebuild must receive new vaultyIds.
+- Send 100% of registry candidates to the planner (no cap).
+  - If payload size becomes a problem, compress fields rather than
+    trimming candidates.
+- Allow the planner to request a registry refresh.
+  - Add a new action type: `REFRESH_REGISTRY`.
 
