@@ -2,10 +2,19 @@
   "manifest_version": 3,
   "name": "Agent Runner (Live + Background)",
   "version": "0.1.0",
-  "permissions": ["tabs", "scripting", "storage", "activeTab"],
+  "permissions": ["tabs", "scripting", "storage", "activeTab", "sidePanel"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_popup": "popup.html" },
+  "action": {},
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "activate-copilot": {
+      "suggested_key": { "default": "Ctrl+Shift+V", "mac": "Command+Shift+V" },
+      "description": "Activate Vaulty Copilot"
+    }
+  },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
@@ -16,7 +25,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["overlay.js"],
+      "resources": ["overlay.js", "mini-overlay.js"],
       "matches": ["<all_urls>"]
     }
   ],
@@ -31,4 +40,3 @@
     ]
   }
 }
-

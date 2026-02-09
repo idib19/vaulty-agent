@@ -22,7 +22,7 @@
   window.__agentOverlayInjected = true;
 
   const script = document.createElement("script");
-  script.src = chrome.runtime.getURL("overlay.js");
+  script.src = chrome.runtime.getURL("mini-overlay.js");
   script.type = "text/javascript";
   document.documentElement.appendChild(script);
 })();
@@ -2344,7 +2344,15 @@ async function execute(action) {
 
 // Listen for HUD messages
 window.addEventListener("message", (ev) => {
-  if (!ev.data || ev.data.source !== "agent-hud") return;
+  if (!ev.data) return;
+
+  // TOGGLE_SIDE_PANEL from mini-overlay
+  if (ev.data.source === "agent-mini-overlay" && ev.data.type === "TOGGLE_SIDE_PANEL") {
+    chrome.runtime.sendMessage({ type: "TOGGLE_SIDE_PANEL" });
+    return;
+  }
+
+  if (ev.data.source !== "agent-hud") return;
 
   if (ev.data.type === "TOGGLE_HIGHLIGHTS") {
     highlightAllElements(ev.data.show);
@@ -2384,6 +2392,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return; // Ignore - we're in an iframe
     }
     
+    if (msg.type === "OBSERVE_LIGHT") {
+      sendResponse({
+        url: location.href,
+        title: document.title,
+        selectedText: window.getSelection()?.toString() || "",
+        pageText: document.body?.innerText?.slice(0, 6000) || "",
+      });
+      return;
+    }
     if (msg.type === "OBSERVE") {
       // Reason can be "initial", "spa-route-change", or "manual"
       // Note: After SPA route changes (detected via history.pushState/replaceState/popstate),

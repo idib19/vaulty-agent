@@ -411,8 +411,10 @@ function isSubmitLike(action: AgentAction, observation?: PageObservation): boole
   if (action.type !== "CLICK") return false;
   const target = action.target;
   if ("text" in target && target.text) {
-    const text = target.text.toLowerCase();
-    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => text.includes(k));
+    const raw = target.text;
+    const text = typeof raw === "string" ? raw : (raw.exact ?? (Array.isArray(raw.contains) ? raw.contains.join(" ") : ""));
+    const lower = text.toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => lower.includes(k));
   }
   if (target.by === "intent" && typeof target.intent === "string") {
     const intent = target.intent.toLowerCase();

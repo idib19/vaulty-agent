@@ -18,6 +18,30 @@ const pendingTabSwitches = new Map();
 // Track which tabs are being monitored by the agent
 const activeAgentTabs = new Set();
 
+// Track side panel open state for mini-overlay toggle
+let sidePanelOpen = false;
+
+// Open side panel on extension icon click (no popup)
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch (e) {
+    console.error("[agent] Failed to open side panel:", e);
+  }
+});
+
+// Open side panel on hotkey (activate-copilot)
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === "activate-copilot") {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab) await chrome.sidePanel.open({ tabId: tab.id });
+    } catch (e) {
+      console.error("[agent] Failed to open side panel:", e);
+    }
+  }
+});
+
 // Listen for new tabs created by clicks (e.g., Apply buttons with target="_blank")
 chrome.tabs.onCreated.addListener((tab) => {
   // Only care about tabs opened by one of our monitored tabs
@@ -680,6 +704,39 @@ async function captureScreenshot(tabId) {
     });
     return null;
   }
+}
+
+async function copilotSummarize(tabId) {
+  const apiBase = await getApiBase();
+  let context = { url: "", title: "", selectedText: "", pageText: "" };
+  try {
+    context = await sendToTab(tabId, { type: "OBSERVE_LIGHT" });
+  } catch (e) {
+    console.warn("[copilot] OBSERVE_LIGHT failed, using tab info:", e);
+    const tab = await chrome.tabs.get(tabId);
+    context.url = tab.url || "";
+    context.title = tab.title || "";
+  }
+  const screenshot = await captureScreenshot(tabId);
+  const response = await fetch(`${apiBase}/api/copilot/interpret`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      task: "summarize",
+      screenshot: screenshot || undefined,
+      context: {
+        url: context.url,
+        title: context.title,
+        selectedText: context.selectedText || undefined,
+        pageText: context.pageText || undefined,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Copilot API error: ${response.status} ${err}`);
+  }
+  return response.json();
 }
 
 // Create ASK_USER action for loop situation
@@ -1696,6 +1753,19 @@ async function agentLoop({ jobId, startUrl, mode }) {
       actionHistory = actionHistory.slice(-20);
     }
     await setJob(jobId, { actionHistory });
+
+    // Update session storage for side panel real-time display
+    await chrome.storage.session.set({
+      agentLiveStep: {
+        step,
+        action: { type: action.type, target: describeTarget(action.target), value: action.value },
+        thinking,
+        confidence,
+        fieldName,
+        planProgress,
+        timestamp: Date.now(),
+      },
+    });
     
     // Track for application state updates
     lastAction = action;
@@ -1936,6 +2006,57 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         console.log("[agent] User requested help");
         sendResponse({ ok: true });
         return;
+      }
+
+      if (msg.type === "SIDE_PANEL_OPENED") {
+        sidePanelOpen = true;
+        sendResponse({ ok: true });
+        return;
+      }
+
+      if (msg.type === "SIDE_PANEL_CLOSED") {
+        sidePanelOpen = false;
+        sendResponse({ ok: true });
+        return;
+      }
+
+      if (msg.type === "TOGGLE_SIDE_PANEL") {
+        if (sidePanelOpen) {
+          chrome.runtime.sendMessage({ type: "CLOSE_SIDE_PANEL" });
+          sidePanelOpen = false;
+        } else {
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            try {
+              await chrome.sidePanel.open({ tabId });
+            } catch (e) {
+              console.error("[agent] Failed to open side panel:", e);
+            }
+          }
+        }
+        sendResponse({ ok: true });
+        return;
+      }
+
+      if (msg.type === "COPILOT_SUMMARIZE") {
+        const tabId = msg.tabId ?? sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ ok: false, error: "No tabId" });
+          return;
+        }
+        copilotSummarize(tabId)
+          .then((result) => {
+            chrome.storage.session.set({ copilotResult: result });
+            sendResponse({ ok: true });
+          })
+          .catch((err) => {
+            console.error("[copilot] Summarize failed:", err);
+            chrome.storage.session.set({
+              copilotResult: { error: err.message, type: "error" },
+            });
+            sendResponse({ ok: false, error: err.message });
+          });
+        return true;
       }
 
       // Handle request for resume file from content script
