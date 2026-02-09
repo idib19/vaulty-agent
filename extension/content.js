@@ -1925,6 +1925,98 @@ function resolveTargetForAction(action, options = {}) {
   return { ...resolved, registry };
 }
 
+function computeDomFingerprint() {
+  const elements = document.querySelectorAll("*");
+  let hash = elements.length;
+  hash += (document.body?.innerText?.length || 0) % 1000;
+  return hash;
+}
+
+function normalizeValue(value) {
+  return String(value ?? "").trim();
+}
+
+function getElementValue(el) {
+  if (!el) return "";
+  if (el.isContentEditable) {
+    return el.innerText || "";
+  }
+  if ("value" in el) {
+    return el.value ?? "";
+  }
+  return el.textContent || "";
+}
+
+async function verifyFillResult(el, expectedValue) {
+  const expected = normalizeValue(expectedValue);
+  let actual = normalizeValue(getElementValue(el));
+  if (actual === expected) return { ok: true, expected, actual };
+  if (actual && expected && (actual.includes(expected) || expected.includes(actual))) {
+    return { ok: true, expected, actual, note: "soft_match" };
+  }
+  for (let i = 0; i < 2; i++) {
+    await new Promise(r => setTimeout(r, 50));
+    actual = normalizeValue(getElementValue(el));
+    if (actual === expected) return { ok: true, expected, actual };
+  }
+  return { ok: false, expected, actual };
+}
+
+async function verifySelectResult(el, expectedValue) {
+  const expected = normalizeValue(expectedValue);
+  if (!el) return { ok: false, expected, actual: "" };
+  const actual = normalizeValue(el.value);
+  if (actual === expected) return { ok: true, expected, actual };
+  const selectedText = el.options && el.selectedIndex >= 0 ? normalizeValue(el.options[el.selectedIndex]?.text || "") : "";
+  if (selectedText === expected) return { ok: true, expected, actual: actual || selectedText };
+  if (selectedText && expected && (selectedText.includes(expected) || expected.includes(selectedText))) {
+    return { ok: true, expected, actual: selectedText, note: "soft_match" };
+  }
+  return { ok: false, expected, actual: actual || selectedText };
+}
+
+async function verifyCustomSelectResult(el, expectedValue) {
+  const expected = normalizeValue(expectedValue);
+  const display = normalizeValue(getElementValue(el)) || normalizeValue(el.getAttribute("aria-label") || "");
+  if (!display) return { ok: false, expected, actual: display };
+  if (display === expected) return { ok: true, expected, actual: display };
+  if (display.includes(expected) || expected.includes(display)) {
+    return { ok: true, expected, actual: display, note: "soft_match" };
+  }
+  return { ok: false, expected, actual: display };
+}
+
+async function verifyCheckResult(el, expectedChecked) {
+  const expected = expectedChecked !== false;
+  const actual = !!el.checked;
+  return { ok: actual === expected, expected, actual };
+}
+
+async function verifyClickOutcome(beforeState, timeoutMs = 800) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise(r => setTimeout(r, 120));
+    const currentUrl = location.href;
+    const currentRouteVersion = routeVersion;
+    const currentHash = computeDomFingerprint();
+    const currentModal = detectActiveModal();
+    const modalTitle = currentModal?.title || null;
+    if (currentUrl !== beforeState.url) {
+      return { ok: true, reason: "url_changed", from: beforeState.url, to: currentUrl };
+    }
+    if (currentRouteVersion !== beforeState.routeVersion) {
+      return { ok: true, reason: "route_changed" };
+    }
+    if (currentHash !== beforeState.domHash) {
+      return { ok: true, reason: "dom_changed" };
+    }
+    if (modalTitle !== beforeState.modalTitle) {
+      return { ok: true, reason: "modal_changed" };
+    }
+  }
+  return { ok: false, reason: "no_observable_change" };
+}
+
 async function execute(action) {
   try {
     // Tell overlay what we're doing (with enhanced data)
@@ -1998,9 +2090,20 @@ async function execute(action) {
       if (!el) return { ok: false, fatal: false, error: "CLICK target not found", resolutionTrace: resolved.trace };
       highlight(el);
 
+      const beforeState = {
+        url: location.href,
+        routeVersion,
+        domHash: computeDomFingerprint(),
+        modalTitle: detectActiveModal()?.title || null
+      };
+
       // Use efficient click method
       await clickEfficient(el);
-      return { ok: true };
+      const verification = await verifyClickOutcome(beforeState);
+      if (!verification.ok) {
+        return { ok: false, fatal: false, error: "CLICK no observable change", resolutionTrace: resolved.trace, verification };
+      }
+      return { ok: true, verification };
     }
 
     if (action.type === "FILL") {
@@ -2031,7 +2134,11 @@ async function execute(action) {
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      return { ok: true };
+      const verification = await verifyFillResult(el, action.value);
+      if (!verification.ok) {
+        return { ok: false, fatal: false, error: "FILL value mismatch", resolutionTrace: resolved.trace, verification };
+      }
+      return { ok: true, verification };
     }
 
     if (action.type === "SELECT") {
@@ -2041,7 +2148,11 @@ async function execute(action) {
       highlight(el);
       el.value = action.value;
       el.dispatchEvent(new Event("change", { bubbles: true }));
-      return { ok: true };
+      const verification = await verifySelectResult(el, action.value);
+      if (!verification.ok) {
+        return { ok: false, fatal: false, error: "SELECT value mismatch", resolutionTrace: resolved.trace, verification };
+      }
+      return { ok: true, verification };
     }
 
     if (action.type === "SELECT_CUSTOM") {
@@ -2130,8 +2241,11 @@ async function execute(action) {
 
       // Minimal wait for selection to register
       await new Promise(r => setTimeout(r, 50));
-      
-      return { ok: true, note: `Selected "${matchedOption.textContent.trim()}"` };
+      const verification = await verifyCustomSelectResult(el, action.value);
+      if (!verification.ok) {
+        return { ok: false, fatal: false, error: "SELECT_CUSTOM value mismatch", resolutionTrace: resolved.trace, verification };
+      }
+      return { ok: true, note: `Selected "${matchedOption.textContent.trim()}"`, verification };
     }
 
     if (action.type === "CHECK") {
@@ -2151,7 +2265,11 @@ async function execute(action) {
         el.checked = action.checked !== false;
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      return { ok: true };
+      const verification = await verifyCheckResult(el, action.checked);
+      if (!verification.ok) {
+        return { ok: false, fatal: false, error: "CHECK value mismatch", resolutionTrace: resolved.trace, verification };
+      }
+      return { ok: true, verification };
     }
 
     if (action.type === "UPLOAD_FILE") {
