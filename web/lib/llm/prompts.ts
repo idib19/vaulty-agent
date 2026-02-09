@@ -1,4 +1,4 @@
-import type { FormField, FormButton, PageObservation, AlternativeElement, LoopContext } from "./types";
+import type { FormField, FormButton, PageObservation, AlternativeElement, LoopContext, CandidateElement } from "./types";
 import type { UserProfile } from "../profile";
 import type { ApplicationState } from "../types";
 import { profileToContext } from "../profile";
@@ -127,6 +127,28 @@ function normalizeShorthandAction(action: unknown): unknown {
   return action;
 }
 
+function formatCandidateRegistry(candidates?: CandidateElement[]): string {
+  if (!candidates || candidates.length === 0) return "(none)";
+  return candidates.map(c => {
+    const parts: string[] = [];
+    const context = c.context || "PAGE";
+    parts.push(`[${context}]`);
+    parts.push(c.type || "element");
+    parts.push(`vaultyId="${c.vaultyId}"`);
+    if (c.text) parts.push(`text="${c.text}"`);
+    if (c.label) parts.push(`label="${c.label}"`);
+    if (c.ariaLabel) parts.push(`ariaLabel="${c.ariaLabel}"`);
+    if (c.attributes?.id) parts.push(`id="${c.attributes.id}"`);
+    if (c.attributes?.name) parts.push(`name="${c.attributes.name}"`);
+    if (c.attributes?.dataTestId) parts.push(`dataTestId="${c.attributes.dataTestId}"`);
+    if (c.formId) parts.push(`form="${c.formId}"`);
+    if (c.sectionHeading) parts.push(`section="${c.sectionHeading}"`);
+    if (c.isVisible === false) parts.push("hidden");
+    if (c.isEnabled === false) parts.push("disabled");
+    return parts.join(" ");
+  }).join("\n");
+}
+
 // ============================================================
 // GOAL CONTEXT BUILDER
 // ============================================================
@@ -232,7 +254,9 @@ OPERATING RULES
 - Do NOT try to batch multiple actions (e.g., fill email + fill password + click login). Do ONE thing at a time.
 - Use ONLY the user's profile data provided. Do not invent information.
 - BEFORE filling a field, check its current "value" property in the fields list. Skip if already correctly filled!
-- When identifiers exist, prefer targeting by id (by:"id"). Otherwise use index targeting (by:"index").
+- If a CANDIDATE REGISTRY is provided, ALWAYS target by vaultyId (by:"vaultyId") for the chosen element.
+- If no reliable vaultyId is available, use intent targeting (by:"intent") with role/text/label/attributes.
+- Only fall back to id/label/text/index when the registry is missing or empty.
 - For multi-step flows, use Next/Continue buttons to proceed.
 
 ⚠️ CRITICAL: VALUE SOURCES FOR FILL ACTIONS ⚠️
@@ -304,7 +328,7 @@ There are TWO types of dropdowns:
    - These are div-based dropdowns that require clicking to open, then clicking an option
    - Look for: dropdownExpanded (true/false) and dropdownOptions (list of available options)
    - Option A: Use SELECT_CUSTOM for automatic handling:
-     {"type":"SELECT_CUSTOM","target":{"by":"index","index":<n>,"elementType":"field"},"value":"<option text>"}
+     {"type":"SELECT_CUSTOM","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<option text>"}
    - Option B: Manual two-step approach:
      Step 1: CLICK the dropdown trigger to open it (if dropdownExpanded=false)
      Step 2: In next turn, CLICK the desired option text from dropdownOptions
@@ -367,19 +391,16 @@ SUBMISSION & SUCCESS
 - If you hit blockers (OTP, email code, password prompt, OAuth popup), use REQUEST_VERIFICATION.
 
 ACTIONS (choose exactly one for the "action" field)
-- FILL: {"type":"FILL","target":{"by":"id","selector":"<id>"},"value":"<value>"}
-  or {"type":"FILL","target":{"by":"index","index":<n>,"elementType":"field"},"value":"<value>"}
-- SELECT: {"type":"SELECT","target":{"by":"id","selector":"<id>"},"value":"<option_value>"}
-  For native <select> elements only. Value must match an option's value attribute.
-- SELECT_CUSTOM: {"type":"SELECT_CUSTOM","target":{"by":"index","index":<n>,"elementType":"field"},"value":"<option text>"}
-  For custom dropdowns (isCustomDropdown=true). Automatically clicks to open and selects the option.
-- CHECK: {"type":"CHECK","target":{"by":"id","selector":"<id>"},"checked":true}
-- CLICK: {"type":"CLICK","target":{"by":"text","text":"<button_text>"}}
-  ⚠️ STRONGLY PREFER text-based targeting! Only use index if button has no text.
-  Fallback: {"type":"CLICK","target":{"by":"index","index":<n>,"elementType":"button"}}
-- UPLOAD_FILE: {"type":"UPLOAD_FILE","target":{"by":"index","index":<n>,"elementType":"field"},"fileType":"resume"}
-  Use when you see a file upload field for resume/CV AND "RESUME FILE AVAILABLE" appears in profile context.
-- WAIT_FOR: {"type":"WAIT_FOR","target":{"by":"text","text":"<text>"},"timeoutMs":5000}
+- FILL (preferred): {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<value>"}
+- FILL (intent fallback): {"type":"FILL","target":{"by":"intent","intent":"fill_field","role":"textbox","label":"Email","text":{"contains":["Email"]}},"value":"<value>"}
+- SELECT (native <select>): {"type":"SELECT","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<option_value>"}
+- SELECT_CUSTOM (custom dropdown): {"type":"SELECT_CUSTOM","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<option text>"}
+- CHECK: {"type":"CHECK","target":{"by":"vaultyId","id":"<vaultyId>"},"checked":true}
+- CLICK: {"type":"CLICK","target":{"by":"vaultyId","id":"<vaultyId>"}}
+- CLICK (intent fallback): {"type":"CLICK","target":{"by":"intent","intent":"submit_application","role":"button","text":{"contains":["Submit","Apply"]}}}
+- UPLOAD_FILE: {"type":"UPLOAD_FILE","target":{"by":"vaultyId","id":"<vaultyId>"},"fileType":"resume"}
+- WAIT_FOR: {"type":"WAIT_FOR","target":{"by":"intent","intent":"wait_for_text","text":{"contains":["Success","Thank you"]}},"timeoutMs":5000}
+- REFRESH_REGISTRY: {"type":"REFRESH_REGISTRY"}
 - REQUEST_VERIFICATION: {"type":"REQUEST_VERIFICATION","kind":"OTP"|"EMAIL_CODE"|"PASSWORD"|"OAUTH","context":{"hint":"<why>"}}
   Use for login codes, email verification, password entry, or OAuth popups.
 - ASK_USER: {"type":"ASK_USER","question":"<clear question for the user>","options":[{"id":"1","label":"<option 1>"},{"id":"2","label":"<option 2>"}],"allowCustom":true}
@@ -454,6 +475,9 @@ export function buildUserPrompt(
       return desc;
     })
     .join("\n");
+
+  // Candidate registry (executor v2)
+  const candidatesText = formatCandidateRegistry(observation.candidates);
   
   // Modal status (important for context priority)
   const modalStatus = observation.hasActiveModal 
@@ -593,6 +617,9 @@ ${fieldsText || "(No editable fields found)"}
 BUTTONS:
 ${buttonsText || "(No buttons found)"}${specialElementsText}${historyText}
 
+CANDIDATE REGISTRY (use vaultyId for targeting):
+${candidatesText}
+
 PAGE CONTEXT (truncated):
 ${observation.pageContext.slice(0, 2000)}
 
@@ -636,22 +663,22 @@ RESPONSE FORMAT (JSON):
   "confidence": <0.0 to 1.0>,
   "plan": [
     {
-      "action": {"type":"FILL","target":{"by":"label","text":"Full name"},"value":"<ACTUAL firstName lastName from profile>"},
+      "action": {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<ACTUAL firstName lastName from profile>"},
       "fieldName": "Full name",
       "expectedResult": "Name field filled with profile name"
     },
     {
-      "action": {"type":"FILL","target":{"by":"label","text":"Email"},"value":"<ACTUAL email from profile>"},
+      "action": {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<ACTUAL email from profile>"},
       "fieldName": "Email",
       "expectedResult": "Email field filled with profile email"
     },
     {
-      "action": {"type":"FILL","target":{"by":"label","text":"Phone"},"value":"<ACTUAL phone from profile>"},
+      "action": {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<ACTUAL phone from profile>"},
       "fieldName": "Phone",
       "expectedResult": "Phone field filled with profile phone"
     },
     {
-      "action": {"type":"CLICK","target":{"by":"text","text":"Submit"}},
+      "action": {"type":"CLICK","target":{"by":"vaultyId","id":"<vaultyId>"}},
       "fieldName": "Submit button",
       "expectedResult": "Form submitted"
     }
@@ -662,7 +689,7 @@ RESPONSE FORMAT (JSON):
 PLANNING RULES:
 1. ANALYZE ALL FIELDS: Look at every field on the page before creating the plan.
 2. SKIP FILLED FIELDS: If a field already has the correct value, don't include it in the plan.
-3. USE FIELD LABELS: Target fields by their label text (e.g., "Full name", "Email") - NOT by index!
+3. USE vaultyId TARGETING: If CANDIDATE REGISTRY is provided, target by vaultyId for all actions.
 4. HUMAN-READABLE fieldName: The "fieldName" must be the field's visible label for HUD display.
 5. ORDER MATTERS: Plan actions in top-to-bottom, left-to-right order as fields appear on the form.
 6. END WITH NAVIGATION: Last action should be clicking Next/Continue/Submit ONLY if all REQUIRED fields are filled.
@@ -676,9 +703,9 @@ If a REQUIRED field has no profile data (shows "⚠️ NOT SET"):
 - Only proceed to Submit AFTER the user provides the missing required data
 
 FIELD TARGETING (CRITICAL):
-- PREFERRED: {"by":"label","text":"Full name"} - Use the field's visible label
-- FALLBACK: {"by":"id","selector":"input-name"} - Use field ID if label unclear
-- LAST RESORT: {"by":"index","index":1,"elementType":"field"} - Only if no label/id
+- PREFERRED: {"by":"vaultyId","id":"<vaultyId>"} - Use candidate registry
+- FALLBACK: {"by":"intent","intent":"fill_field","role":"textbox","label":"Full name"} - Provide intent + label
+- LAST RESORT: {"by":"label","text":"Full name"} or {"by":"id","selector":"input-name"}
 
 ⭐ PROFILE DATA → FIELD MAPPING (USE THESE VALUES):
 - "Full name" / "Name" field → Use: firstName + " " + lastName from profile
@@ -705,7 +732,8 @@ DO NOT INCLUDE IN PLAN:
 
 FILE UPLOAD HANDLING:
 If you see a Resume/CV file upload field AND "RESUME FILE AVAILABLE" appears in the profile:
-- Add UPLOAD_FILE action to your plan: {"type":"UPLOAD_FILE","target":{"by":"index","index":<n>,"elementType":"field"},"fileType":"resume"}
+- Add UPLOAD_FILE action to your plan: {"type":"UPLOAD_FILE","target":{"by":"vaultyId","id":"<vaultyId>"},"fileType":"resume"}
+  (Fallback: {"by":"index","index":<n>,"elementType":"field"} if no vaultyId exists)
 - If no resume file is available, do NOT include file upload in the plan (ask user separately)
 
 WHEN TO RE-PLAN (you'll be asked to create a new plan when):
@@ -723,6 +751,7 @@ export function buildPlanningPrompt(
   const profileContext = profileToContext(profile);
   const goalContext = buildGoalContext(applicationState);
   const hasResumeFile = !!profileContext["RESUME FILE AVAILABLE"];
+  const candidatesText = formatCandidateRegistry(observation.candidates);
   
   // Check for file upload fields
   const fileUploadFields = observation.fields.filter(f => f.type === "file");
@@ -844,12 +873,22 @@ ${missingRequiredWarning}
   if (fileUploadFields.length > 0) {
     const fileField = fileUploadFields[0]; // Usually just one resume upload
     const fileLabel = fileField.label || fileField.name || "Resume/CV";
+    const fileCandidate = observation.candidates?.find(c => {
+      if (!c.attributes) return false;
+      if (c.attributes.type && c.attributes.type !== "file") return false;
+      if (fileField.id && c.attributes.id === fileField.id) return true;
+      if (fileField.name && c.attributes.name === fileField.name) return true;
+      return false;
+    });
+    const fileTarget = fileCandidate
+      ? `{"by":"vaultyId","id":"${fileCandidate.vaultyId}"}`
+      : `{"by":"index","index":${fileField.index},"elementType":"field"}`;
     if (hasResumeFile) {
       fileUploadSection = `
 📎 FILE UPLOAD REQUIRED:
 - Field: "${fileLabel}" [index ${fileField.index}]
 - ✅ RESUME FILE AVAILABLE: ${profileContext["RESUME FILE AVAILABLE"]}
-- ACTION TO ADD: {"type":"UPLOAD_FILE","target":{"by":"index","index":${fileField.index},"elementType":"field"},"fileType":"resume"}
+- ACTION TO ADD: {"type":"UPLOAD_FILE","target":${fileTarget},"fileType":"resume"}
   Include this action FIRST in your plan!`;
     } else {
       fileUploadSection = `
@@ -874,6 +913,9 @@ ${fieldsForPlanning || "(No editable fields found)"}
 
 AVAILABLE BUTTONS:
 ${buttonsText || "(No buttons found)"}
+
+CANDIDATE REGISTRY (use vaultyId for targeting):
+${candidatesText}
 
 PAGE CONTEXT (truncated):
 ${(observation.pageContext || "").slice(0, 1500)}
@@ -914,6 +956,10 @@ WHAT TO LOOK FOR IN THE SCREENSHOT:
 - Confirmation/success messages
 - Job application buttons (Apply, Easy Apply, Quick Apply)
 
+TARGETING RULES (CRITICAL):
+- If CANDIDATE REGISTRY is provided in the prompt, always target by vaultyId.
+- Use intent/text targeting only if no suitable vaultyId exists.
+
 WHEN SOMETHING BLOCKS THE WAY:
 - Cookie/GDPR banner → Click "Accept" or "Accept All" or "Close"
 - Modal/popup → Click "X" or "Close" or click outside to dismiss
@@ -946,14 +992,15 @@ RESPONSE FORMAT:
 If login needs email + password, fill EMAIL first. Password will be filled in the next step.
 
 ACTION EXAMPLES:
-- Fill field: {"type":"FILL","target":{"by":"index","index":0,"elementType":"field"},"value":"john@email.com"}
-- Click button (PREFERRED): {"type":"CLICK","target":{"by":"text","text":"Sign In"}}
-- Click Apply button: {"type":"CLICK","target":{"by":"text","text":"Easy Apply"}} or {"type":"CLICK","target":{"by":"text","text":"Apply Now"}}
+- Fill field (preferred): {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"john@email.com"}
+- Click button (preferred): {"type":"CLICK","target":{"by":"vaultyId","id":"<vaultyId>"}}
+- Click Apply button (intent fallback): {"type":"CLICK","target":{"by":"intent","intent":"apply","role":"button","text":{"contains":["Apply","Easy Apply"]}}}
 - Dismiss cookie: {"type":"CLICK","target":{"by":"text","text":"Accept"}}
 - Navigate/progress: {"type":"CLICK","target":{"by":"text","text":"Next"}} or {"type":"CLICK","target":{"by":"text","text":"Continue"}}
 - When stuck/unsure: {"type":"ASK_USER","question":"I see multiple buttons but unsure which to click. Can you help?","options":[...],"allowCustom":true}
 
-⚠️ CRITICAL: Always use button TEXT for clicks, NOT index numbers! "CLICK index 0" is WRONG - use the button's visible text instead.
+⚠️ CRITICAL: If CANDIDATE REGISTRY is present, use vaultyId for clicks (most reliable).
+Use text-based targeting only if vaultyId is unavailable. Avoid index targeting.
 
 IF COMPLETELY BLOCKED (blank page, error, no visible actions):
 Use ASK_USER to request human assistance:
@@ -981,6 +1028,10 @@ CRITICAL RULES (ANTI-HALLUCINATION):
 5. Dismiss blocking overlays first (cookie banners, popups).
 6. On company ATS pages (Lever, Greenhouse, Workday), the "Apply" button is often a styled LINK, not a button - look for it!
 
+TARGETING RULES (CRITICAL):
+- If CANDIDATE REGISTRY is provided in the prompt, always target by vaultyId.
+- Use intent/text targeting only if no suitable vaultyId exists.
+
 RESPONSE FORMAT:
 {
   "thinking": "<what I see + how I verified it's the target job + why this is the best next action>",
@@ -989,18 +1040,18 @@ RESPONSE FORMAT:
 }
 
 ACTION SCHEMA (use EXACTLY these shapes):
-- CLICK: {"type":"CLICK","target":{"by":"text","text":"<button text>"}} (preferred)
-  Fallback: {"type":"CLICK","target":{"by":"index","index":<n>,"elementType":"button"}}
-- FILL: {"type":"FILL","target":{"by":"label","text":"<field label>"},"value":"<value>"}
-  or {"type":"FILL","target":{"by":"id","selector":"<id>"},"value":"<value>"}
-- SELECT: {"type":"SELECT","target":{"by":"label","text":"<field label>"},"value":"<option>"}
-- CHECK: {"type":"CHECK","target":{"by":"label","text":"<field label>"},"checked":true}
+- CLICK: {"type":"CLICK","target":{"by":"vaultyId","id":"<vaultyId>"}} (preferred)
+  Fallback: {"type":"CLICK","target":{"by":"intent","intent":"apply","role":"button","text":{"contains":["Apply","Easy Apply"]}}}
+- FILL: {"type":"FILL","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<value>"}
+  or {"type":"FILL","target":{"by":"intent","intent":"fill_field","role":"textbox","label":"<field label>"},"value":"<value>"}
+- SELECT: {"type":"SELECT","target":{"by":"vaultyId","id":"<vaultyId>"},"value":"<option>"}
+- CHECK: {"type":"CHECK","target":{"by":"vaultyId","id":"<vaultyId>"},"checked":true}
 - WAIT_FOR: {"type":"WAIT_FOR","target":{"by":"text","text":"<text to appear>"},"timeoutMs":15000}
 - ASK_USER: {"type":"ASK_USER","question":"<question>","options":[...],"allowCustom":true}
 - DONE: {"type":"DONE","summary":"<evidence of submission>"}
 
 CLICK RULE:
-- Prefer CLICK by visible text. Only use index targeting if there is no reliable text.
+- Prefer vaultyId if available. Use intent or text only if vaultyId is missing.
 - Do NOT return shorthand like {"CLICK":"Apply"}. Always return the full object with "type" and "target".
 `;
 
@@ -1012,6 +1063,7 @@ export function buildInitialVisionPrompt(
 ): string {
   const profileContext = profileToContext(profile);
   const goal = applicationState?.goal;
+  const candidatesText = formatCandidateRegistry(observation.candidates);
 
   const goalLine = goal
     ? `TARGET JOB: "${goal.jobTitle}" at "${goal.company}"\nJOB URL (reference): ${goal.jobUrl}`
@@ -1055,6 +1107,9 @@ DOM SUMMARY (may be incomplete vs screenshot):
 - Buttons (sample): ${observation.buttons?.slice(0, 10).map(b => `"${b.text}"`).join(", ") || "none"}
 - Fields (sample): ${observation.fields?.slice(0, 8).map(f => `${f.type || f.tag}${f.label ? `(${f.label})` : ""}`).join(", ") || "none"}
 
+CANDIDATE REGISTRY (use vaultyId for targeting when possible):
+${candidatesText}
+
 PAGE CONTEXT (truncated):
 ${(observation.pageContext || "").slice(0, 1200)}
 `;
@@ -1070,6 +1125,7 @@ export function buildVisionPrompt(
   const profileContext = profileToContext(profile);
   const failedAction = loopContext?.failedAction;
   const failedTarget = failedAction?.target?.text || failedAction?.target?.selector || "unknown";
+  const candidatesText = formatCandidateRegistry(observation.candidates);
   
   // Determine credentials status
   const hasEmail = !!profileContext["email"];
@@ -1137,7 +1193,10 @@ DOM-DETECTED ELEMENTS (may not match screenshot):
 Buttons: ${observation.buttons?.slice(0, 8).map(b => `[${b.index}] "${b.text}"`).join(", ") || "none"}
 Fields: ${observation.fields?.slice(0, 6).map(f => `[${f.index}] ${f.type}`).join(", ") || "none"}
 
-IMPORTANT: Return the SPECIFIC action to execute next. Use index-based targeting if text-based targeting failed.`;
+CANDIDATE REGISTRY (use vaultyId for targeting when possible):
+${candidatesText}
+
+IMPORTANT: Return the SPECIFIC action to execute next. Prefer vaultyId; use intent/text only if no vaultyId is available.`;
 }
 
 export function parseActionResponse(response: string): EnhancedLLMResponse {

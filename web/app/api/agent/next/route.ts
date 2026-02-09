@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
       buttons: body.observation.buttons || [],
       pageContext: body.observation.pageContext || body.observation.text || "",
       specialElements: body.observation.specialElements,
+      candidates: body.observation.candidates || [],
+      registryVersion: body.observation.registryVersion,
     };
     
     // Use provided profile or empty
@@ -175,12 +177,15 @@ export async function POST(request: NextRequest) {
         const plan: ActionPlan = {
           thinking: parsed.thinking,
           confidence: parsed.confidence,
-          plan: parsed.plan.map((step) => ({
-            action: step.action as AgentAction,
-            fieldName: step.fieldName,
-            expectedResult: step.expectedResult,
-            completed: false,
-          })),
+          plan: parsed.plan.map((step) => {
+            const resolved = resolveActionTargetWithCandidates(step.action as AgentAction, observation);
+            return {
+              action: resolved.action as AgentAction,
+              fieldName: step.fieldName,
+              expectedResult: step.expectedResult,
+              completed: false,
+            };
+          }),
           currentStepIndex: 0,
           startUrl: observation.url,
           createdAt: new Date().toISOString(),
@@ -334,15 +339,23 @@ export async function POST(request: NextRequest) {
     // Parse enhanced response (with thinking and confidence)
     console.log(`[Planner] 🔍 Parsing LLM response...`);
     const parsed = parseActionResponse(response.content);
-    const action = parsed.action as AgentAction;
+    let action = parsed.action as AgentAction;
     const thinking = parsed.thinking;
     const confidence = parsed.confidence;
+
+    const resolvedAction = resolveActionTargetWithCandidates(action, observation);
+    action = resolvedAction.action;
+    if (resolvedAction.matchedCandidate) {
+      console.log(`[Planner] 🔧 Resolved target to vaultyId "${resolvedAction.matchedCandidate.vaultyId}" (score ${resolvedAction.score?.toFixed(2)})`);
+    }
     
     // Extract target info for logging (not all action types have target)
     const actionWithTarget = action as { target?: Target };
     const targetInfo = actionWithTarget.target 
       ? ((actionWithTarget.target as { text?: string }).text || 
          (actionWithTarget.target as { selector?: string }).selector || 
+         (actionWithTarget.target as { id?: string }).id ||
+         (actionWithTarget.target as { intent?: string }).intent ||
          `index ${(actionWithTarget.target as { index?: number }).index}`)
       : "none";
     
@@ -362,10 +375,10 @@ export async function POST(request: NextRequest) {
     const forceLive = 
       action.type === "REQUEST_VERIFICATION" ||
       action.type === "ASK_USER" ||
-      (action.type === "CLICK" && isSubmitLike(action));
+      (action.type === "CLICK" && isSubmitLike(action, observation));
     
     // Add approval requirement for submit-like actions
-    if (action.type === "CLICK" && isSubmitLike(action)) {
+    if (action.type === "CLICK" && isSubmitLike(action, observation)) {
       action.requiresApproval = true;
     }
     
@@ -394,14 +407,295 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function isSubmitLike(action: AgentAction): boolean {
+function isSubmitLike(action: AgentAction, observation?: PageObservation): boolean {
   if (action.type !== "CLICK") return false;
   const target = action.target;
-  if ("text" in target) {
+  if ("text" in target && target.text) {
     const text = target.text.toLowerCase();
     return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => text.includes(k));
   }
+  if (target.by === "intent" && typeof target.intent === "string") {
+    const intent = target.intent.toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => intent.includes(k));
+  }
+  if (target.by === "vaultyId" && observation?.candidates?.length) {
+    const candidate = observation.candidates.find(c => c.vaultyId === target.id);
+    const text = (candidate?.text || candidate?.label || candidate?.ariaLabel || "").toLowerCase();
+    return ["submit", "apply", "confirm", "pay", "finish", "send", "complete", "place order"].some(k => text.includes(k));
+  }
   return false;
+}
+
+type TargetHints = {
+  text?: string | { exact?: string; contains?: string[] };
+  label?: string;
+  role?: string;
+  attributes?: { id?: string; name?: string; dataTestId?: string };
+  context?: { form?: string; section?: string; modalTitle?: string };
+  intent?: string;
+};
+
+function normalizeText(value: string | undefined | null): string {
+  return (value || "").toLowerCase().trim();
+}
+
+function extractAttributesFromSelector(selector: string): { id?: string; name?: string; dataTestId?: string } {
+  const attrs: { id?: string; name?: string; dataTestId?: string } = {};
+  if (selector.startsWith("#")) {
+    attrs.id = selector.slice(1);
+    return attrs;
+  }
+  const idMatch = selector.match(/#([A-Za-z0-9\-_:.]+)/);
+  if (idMatch) attrs.id = idMatch[1];
+
+  const nameMatch = selector.match(/\[name=["']?([^"'\]]+)["']?\]/i);
+  if (nameMatch) attrs.name = nameMatch[1];
+
+  const testIdMatch = selector.match(/\[data-testid=["']?([^"'\]]+)["']?\]/i) ||
+    selector.match(/\[data-test-id=["']?([^"'\]]+)["']?\]/i);
+  if (testIdMatch) attrs.dataTestId = testIdMatch[1];
+  return attrs;
+}
+
+function buildTargetHints(action: AgentAction, observation: PageObservation): TargetHints {
+  const target = (action as { target?: Target }).target;
+  const hints: TargetHints = {};
+  if (!target) return hints;
+
+  if (action.type === "CLICK") hints.role = "button";
+  if (action.type === "FILL") hints.role = "textbox";
+  if (action.type === "SELECT" || action.type === "SELECT_CUSTOM") hints.role = "combobox";
+  if (action.type === "CHECK") hints.role = "checkbox";
+
+  if (target.by === "text") {
+    hints.text = target.text;
+  } else if (target.by === "label") {
+    hints.label = target.text;
+    hints.text = target.text;
+  } else if (target.by === "id") {
+    hints.attributes = { id: target.selector };
+  } else if (target.by === "role") {
+    hints.role = target.role;
+    if (target.name) hints.text = target.name;
+  } else if (target.by === "index") {
+    if (target.elementType === "field") {
+      const field = observation.fields?.find(f => f.index === target.index);
+      if (field) {
+        hints.label = field.label || field.name || field.id || "";
+        hints.text = hints.label;
+        hints.attributes = {
+          id: field.id || undefined,
+          name: field.name || undefined,
+        };
+        if (field.tag === "select" || field.type === "select") hints.role = "combobox";
+        if (field.type === "checkbox" || field.type === "radio") hints.role = "checkbox";
+      }
+    } else if (target.elementType === "button") {
+      const button = observation.buttons?.find(b => b.index === target.index);
+      if (button) {
+        hints.text = button.text;
+        hints.role = "button";
+        hints.attributes = { id: button.id || undefined };
+        hints.context = button.context ? { form: undefined, section: undefined, modalTitle: button.context === "MODAL" ? observation.modalTitle || undefined : undefined } : undefined;
+      }
+    }
+  } else if (target.by === "css") {
+    hints.attributes = extractAttributesFromSelector(target.selector);
+  } else if (target.by === "intent") {
+    hints.intent = target.intent;
+    hints.role = target.role || hints.role;
+    hints.text = target.text || hints.text;
+    hints.label = target.label || hints.label;
+    hints.attributes = target.attributes || hints.attributes;
+    hints.context = target.context || hints.context;
+  }
+
+  if (!hints.context && observation.hasActiveModal) {
+    hints.context = { modalTitle: observation.modalTitle || undefined };
+  }
+
+  return hints;
+}
+
+function candidateAppliesToAction(action: AgentAction, candidate: { type?: string; role?: string; attributes?: { type?: string | null } }): boolean {
+  const candidateType = normalizeText(candidate.type);
+  const role = normalizeText(candidate.role);
+  const inputType = normalizeText(candidate.attributes?.type);
+
+  switch (action.type) {
+    case "CLICK":
+      return candidateType === "button" || candidateType === "link" || role === "button";
+    case "FILL":
+      return candidateType === "input" || candidateType === "textarea" || role === "textbox";
+    case "SELECT":
+      return candidateType === "select" || role === "combobox";
+    case "SELECT_CUSTOM":
+      return candidateType === "custom-dropdown" || role === "combobox";
+    case "CHECK":
+      return inputType === "checkbox" || inputType === "radio" || role === "checkbox";
+    case "UPLOAD_FILE":
+      return inputType === "file";
+    default:
+      return true;
+  }
+}
+
+function computeTextMatchScore(targetText: TargetHints["text"], candidate: { text?: string; label?: string; ariaLabel?: string }) {
+  const pool = [candidate.text, candidate.label, candidate.ariaLabel].filter(Boolean).map(normalizeText);
+  if (pool.length === 0 || !targetText) return { score: 0, reason: "" };
+
+  const exactTargets: string[] = [];
+  const containsTargets: string[] = [];
+  if (typeof targetText === "string") {
+    exactTargets.push(targetText);
+  } else {
+    if (targetText.exact) exactTargets.push(targetText.exact);
+    if (targetText.contains) containsTargets.push(...targetText.contains);
+  }
+
+  for (const exact of exactTargets) {
+    const wanted = normalizeText(exact);
+    if (pool.some(t => t === wanted)) return { score: 1, reason: "text:exact" };
+  }
+  for (const part of containsTargets) {
+    const wanted = normalizeText(part);
+    if (pool.some(t => t.includes(wanted))) return { score: 0.7, reason: "text:contains" };
+  }
+  return { score: 0, reason: "" };
+}
+
+function computeLabelMatchScore(label: string | undefined, candidate: { label?: string }) {
+  if (!label || !candidate.label) return { score: 0, reason: "" };
+  const wanted = normalizeText(label);
+  const candidateLabel = normalizeText(candidate.label);
+  if (candidateLabel === wanted) return { score: 1, reason: "label:exact" };
+  if (candidateLabel.includes(wanted) || wanted.includes(candidateLabel)) return { score: 0.7, reason: "label:contains" };
+  return { score: 0, reason: "" };
+}
+
+function computeRoleMatchScore(role: string | undefined, candidate: { role?: string }) {
+  if (!role || !candidate.role) return { score: 0, reason: "" };
+  if (normalizeText(role) === normalizeText(candidate.role)) return { score: 1, reason: "role" };
+  return { score: 0, reason: "" };
+}
+
+function computeAttributeMatchScore(attrs: TargetHints["attributes"], candidate: { attributes?: { id?: string | null; name?: string | null; dataTestId?: string | null } }) {
+  if (!attrs || !candidate.attributes) return { score: 0, reason: "" };
+  if (attrs.id && candidate.attributes.id === attrs.id) return { score: 1, reason: "attr:id" };
+  if (attrs.dataTestId && candidate.attributes.dataTestId === attrs.dataTestId) return { score: 1, reason: "attr:data-testid" };
+  if (attrs.name && candidate.attributes.name === attrs.name) return { score: 0.7, reason: "attr:name" };
+  return { score: 0, reason: "" };
+}
+
+function computeContextMatchScore(context: TargetHints["context"], candidate: { formId?: string | null; sectionHeading?: string | null; context?: string }, observation: PageObservation) {
+  let score = 0;
+  let reason = "";
+
+  if (context?.form && candidate.formId) {
+    const wanted = normalizeText(context.form);
+    const formId = normalizeText(candidate.formId);
+    if (formId && (formId === wanted || formId.includes(wanted))) {
+      score = 1;
+      reason = "context:form";
+    }
+  }
+
+  if (context?.section && candidate.sectionHeading) {
+    const wanted = normalizeText(context.section);
+    const section = normalizeText(candidate.sectionHeading);
+    if (section && (section === wanted || section.includes(wanted))) {
+      score = Math.max(score, 0.7);
+      reason = reason || "context:section";
+    }
+  }
+
+  if (context?.modalTitle && candidate.context === "MODAL") {
+    score = Math.max(score, 0.6);
+    reason = reason || "context:modal";
+  }
+
+  if (observation.hasActiveModal && candidate.context === "MODAL") {
+    score = Math.max(score, 0.6);
+    reason = reason || "context:modal";
+  }
+
+  return { score, reason };
+}
+
+function computeCandidateScore(hints: TargetHints, candidate: { text?: string; label?: string; ariaLabel?: string; role?: string; attributes?: { id?: string | null; name?: string | null; dataTestId?: string | null }; formId?: string | null; sectionHeading?: string | null; context?: string; isVisible?: boolean; isEnabled?: boolean }, observation: PageObservation) {
+  const reasons: string[] = [];
+
+  const attrScore = computeAttributeMatchScore(hints.attributes, candidate);
+  if (attrScore.score === 1) {
+    return { score: 1, reasons: [attrScore.reason] };
+  }
+
+  const textScore = computeTextMatchScore(hints.text, candidate);
+  if (textScore.score) reasons.push(textScore.reason);
+
+  let intentScore = 0;
+  if (!textScore.score && hints.intent) {
+    const tokens = normalizeText(hints.intent).split(/[_\s-]+/).filter(Boolean);
+    const pool = [candidate.text, candidate.label, candidate.ariaLabel].filter(Boolean).map(normalizeText);
+    if (tokens.length && pool.some(t => tokens.some(tok => t.includes(tok)))) {
+      intentScore = 0.6;
+      reasons.push("intent");
+    }
+  }
+
+  const roleScore = computeRoleMatchScore(hints.role, candidate);
+  if (roleScore.score) reasons.push(roleScore.reason);
+
+  const labelScore = computeLabelMatchScore(hints.label, candidate);
+  if (labelScore.score) reasons.push(labelScore.reason);
+
+  if (attrScore.score) reasons.push(attrScore.reason);
+
+  const contextScore = computeContextMatchScore(hints.context, candidate, observation);
+  if (contextScore.score) reasons.push(contextScore.reason);
+
+  const visibilityScore = candidate.isVisible && candidate.isEnabled ? 1 : 0;
+  if (visibilityScore) reasons.push("visible");
+
+  const score =
+    0.40 * Math.max(textScore.score, intentScore) +
+    0.20 * roleScore.score +
+    0.15 * labelScore.score +
+    0.10 * attrScore.score +
+    0.10 * contextScore.score +
+    0.05 * visibilityScore;
+
+  return { score, reasons };
+}
+
+function resolveActionTargetWithCandidates(action: AgentAction, observation: PageObservation): { action: AgentAction; matchedCandidate?: { vaultyId: string }; score?: number } {
+  const target = (action as { target?: Target }).target;
+  if (!target || target.by === "vaultyId") return { action };
+  if (!observation.candidates || observation.candidates.length === 0) return { action };
+
+  const hints = buildTargetHints(action, observation);
+  const candidates = observation.candidates.filter(c => candidateAppliesToAction(action, c));
+  if (candidates.length === 0) return { action };
+
+  let best: { candidate: { vaultyId: string }; score: number } | null = null;
+  for (const candidate of candidates) {
+    const result = computeCandidateScore(hints, candidate, observation);
+    if (!best || result.score > best.score) {
+      best = { candidate, score: result.score };
+    }
+  }
+
+  if (!best || best.score < 0.45) return { action };
+
+  const resolvedTarget: Target = {
+    by: "vaultyId",
+    id: best.candidate.vaultyId,
+    text: (target as { text?: string }).text,
+    intent: (target as { intent?: string }).intent,
+  };
+
+  const resolvedAction = { ...action, target: resolvedTarget } as AgentAction;
+  return { action: resolvedAction, matchedCandidate: best.candidate, score: best.score };
 }
 
 // Stub planner for when LLM is not configured
