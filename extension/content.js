@@ -31,6 +31,11 @@
 let highlightedElements = [];
 let pendingAskUserResponse = null;
 
+// Candidate registry (executor v2)
+let vaultyRegistry = null;
+let vaultyRegistryVersion = 0;
+const VAULTY_ID_ATTR = "data-vaulty-id";
+
 // ============================================================================
 // OBSERVATION GATING: Network idle, SPA route changes, DOM stability
 // ============================================================================
@@ -1117,6 +1122,291 @@ function extractButtons(scopeElement = document) {
   return buttons.slice(0, 40); // Limit to 40 buttons (increased for action links)
 }
 
+// ============================================================================
+// CANDIDATE REGISTRY (EXECUTOR V2)
+// ============================================================================
+
+function cssEscapeSafe(value) {
+  if (window.CSS && typeof CSS.escape === "function") return CSS.escape(value);
+  return (value || "").replace(/["\\]/g, "\\$&");
+}
+
+function stableHash(input) {
+  let hash = 5381;
+  const str = String(input || "");
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    hash = hash >>> 0;
+  }
+  return hash.toString(36);
+}
+
+function buildStableKeyForElement(el) {
+  const parts = [
+    el.getAttribute("name") || "",
+    el.getAttribute("data-testid") || el.getAttribute("data-test-id") || "",
+    el.getAttribute("aria-label") || "",
+    (el.innerText || el.value || "").trim(),
+    (el.getAttribute("role") || el.tagName || "").toLowerCase()
+  ];
+  return parts.join("|").trim();
+}
+
+function getOrAssignVaultyId(el) {
+  if (!el) return null;
+  const existing = el.getAttribute(VAULTY_ID_ATTR);
+  if (existing) return existing;
+  if (el.id) return `id:${el.id}`;
+  const key = buildStableKeyForElement(el);
+  const hash = stableHash(key || "node");
+  const vaultyId = `v-${hash}`;
+  try {
+    el.setAttribute(VAULTY_ID_ATTR, vaultyId);
+  } catch (e) {
+    // Ignore setAttribute failures for protected nodes
+  }
+  return vaultyId;
+}
+
+function collectElementsDeep(root, selectors) {
+  const results = [];
+  const visit = (node) => {
+    if (!node || !node.querySelectorAll) return;
+    results.push(...node.querySelectorAll(selectors));
+    const all = node.querySelectorAll("*");
+    all.forEach(el => {
+      if (el.shadowRoot) visit(el.shadowRoot);
+    });
+  };
+  visit(root);
+  return results;
+}
+
+function getDomPath(el) {
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === 1 && parts.length < 6) {
+    let part = node.tagName.toLowerCase();
+    if (node.id) {
+      part += `#${node.id}`;
+    } else if (node.className) {
+      const cls = String(node.className).trim().split(/\s+/)[0];
+      if (cls) part += `.${cls}`;
+    }
+    parts.unshift(part);
+    node = node.parentElement;
+  }
+  return parts.join(">");
+}
+
+function getShadowPath(el) {
+  const path = [];
+  let current = el;
+  while (current) {
+    const root = current.getRootNode();
+    if (root && root.host) {
+      const host = root.host;
+      const desc = host.id ? `#${host.id}` : host.tagName.toLowerCase();
+      path.push(desc);
+      current = host;
+    } else {
+      break;
+    }
+  }
+  return path;
+}
+
+function getVisibilityInfo(el) {
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  const isVisible = style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    rect.width > 0 &&
+    rect.height > 0;
+  const isEnabled = !(el.disabled || el.getAttribute("aria-disabled") === "true");
+  return { isVisible, isEnabled };
+}
+
+function getCandidateText(el) {
+  return (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+}
+
+function findSectionHeading(el) {
+  const container = el.closest("section, fieldset, form, [role='group']");
+  if (container) {
+    const heading = container.querySelector("legend, h1, h2, h3, h4, h5");
+    if (heading) return heading.textContent.trim().slice(0, 120);
+  }
+  let prev = el.previousElementSibling;
+  for (let i = 0; i < 3 && prev; i++) {
+    if (/H[1-6]/.test(prev.tagName)) {
+      return prev.textContent.trim().slice(0, 120);
+    }
+    prev = prev.previousElementSibling;
+  }
+  return null;
+}
+
+function classifyCandidateType(el) {
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input") {
+    const t = (el.getAttribute("type") || "text").toLowerCase();
+    if (t === "submit" || t === "button" || t === "image") return "button";
+    return "input";
+  }
+  if (tag === "textarea") return "textarea";
+  if (tag === "select") return "select";
+  if (tag === "button") return "button";
+  if (tag === "a") return "link";
+  return "element";
+}
+
+function buildCandidateFromElement(el) {
+  const visibility = getVisibilityInfo(el);
+  const type = classifyCandidateType(el);
+  const dropdownInfo = detectCustomDropdown(el);
+  const isCustomDropdown = dropdownInfo.isCustomDropdown;
+  const role = el.getAttribute("role") ||
+    (isCustomDropdown ? "combobox" :
+      type === "button" ? "button" :
+        type === "link" ? "link" :
+          type === "input" ? "textbox" :
+            el.tagName.toLowerCase());
+  const rect = el.getBoundingClientRect();
+  const form = el.closest("form");
+
+  return {
+    vaultyId: null,
+    type: isCustomDropdown ? "custom-dropdown" : type,
+    role,
+    text: getCandidateText(el),
+    label: findLabelForElement(el),
+    placeholder: el.getAttribute("placeholder") || null,
+    ariaLabel: el.getAttribute("aria-label") || null,
+    attributes: {
+      id: el.id || null,
+      name: el.getAttribute("name") || null,
+      dataTestId: el.getAttribute("data-testid") || el.getAttribute("data-test-id") || null,
+      type: el.getAttribute("type") || null
+    },
+    context: getElementContext(el),
+    formId: form?.id || form?.getAttribute("name") || null,
+    sectionHeading: findSectionHeading(el),
+    visibility,
+    bbox: {
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      w: Math.round(rect.width),
+      h: Math.round(rect.height)
+    },
+    domPath: getDomPath(el),
+    shadowPath: getShadowPath(el),
+    isCustomDropdown
+  };
+}
+
+function buildPublicCandidate(candidate) {
+  return {
+    vaultyId: candidate.vaultyId,
+    type: candidate.type,
+    role: candidate.role,
+    text: candidate.text,
+    label: candidate.label,
+    placeholder: candidate.placeholder,
+    ariaLabel: candidate.ariaLabel,
+    attributes: candidate.attributes,
+    context: candidate.context,
+    formId: candidate.formId,
+    sectionHeading: candidate.sectionHeading,
+    isVisible: candidate.visibility.isVisible,
+    isEnabled: candidate.visibility.isEnabled
+  };
+}
+
+function buildCandidateRegistry(scope = document, scopeKey = "PAGE") {
+  const elements = new Set();
+  const usedIds = new Map();
+  const candidates = [];
+  const publicCandidates = [];
+  const elementMap = new Map();
+  const candidateById = new Map();
+
+  const fieldElements = collectElementsDeep(scope, "input, textarea, select");
+  fieldElements.forEach(el => {
+    const type = (el.getAttribute("type") || "text").toLowerCase();
+    if (type === "hidden" || type === "submit" || type === "button" || type === "image") return;
+    elements.add(el);
+  });
+
+  const buttonElements = collectElementsDeep(scope, "button, input[type='submit'], input[type='button'], a[role='button'], [role='button']");
+  buttonElements.forEach(el => elements.add(el));
+
+  const linkElements = collectElementsDeep(scope, "a");
+  linkElements.forEach(el => {
+    if (isActionLink(el)) elements.add(el);
+  });
+
+  const dropdownTriggers = collectElementsDeep(scope, "[role='combobox'], [aria-haspopup='listbox'], [aria-expanded][class*='dropdown'], [aria-expanded][class*='select']");
+  dropdownTriggers.forEach(el => elements.add(el));
+
+  elements.forEach(el => {
+    const visibility = getVisibilityInfo(el);
+    if (!visibility.isVisible) return;
+    const text = getCandidateText(el);
+    if (!text && el.tagName !== "INPUT" && el.tagName !== "SELECT" && el.tagName !== "TEXTAREA") {
+      return;
+    }
+
+    const candidate = buildCandidateFromElement(el);
+    let vaultyId = getOrAssignVaultyId(el);
+    if (!vaultyId) return;
+    if (usedIds.has(vaultyId)) {
+      const count = usedIds.get(vaultyId) + 1;
+      usedIds.set(vaultyId, count);
+      vaultyId = `${vaultyId}~${count}`;
+      if (!el.id) {
+        try {
+          el.setAttribute(VAULTY_ID_ATTR, vaultyId);
+        } catch (e) {
+          // Ignore setAttribute failures
+        }
+      }
+    } else {
+      usedIds.set(vaultyId, 0);
+    }
+
+    candidate.vaultyId = vaultyId;
+    candidates.push(candidate);
+    publicCandidates.push(buildPublicCandidate(candidate));
+    elementMap.set(vaultyId, el);
+    candidateById.set(vaultyId, candidate);
+  });
+
+  vaultyRegistry = {
+    version: ++vaultyRegistryVersion,
+    builtAt: Date.now(),
+    url: location.href,
+    routeVersion,
+    scopeKey,
+    candidates,
+    publicCandidates,
+    elementMap,
+    candidateById
+  };
+
+  return vaultyRegistry;
+}
+
+function getCandidateRegistry({ scope = document, scopeKey = "PAGE", force = false } = {}) {
+  if (!force && vaultyRegistry &&
+      vaultyRegistry.url === location.href &&
+      vaultyRegistry.routeVersion === routeVersion &&
+      vaultyRegistry.scopeKey === scopeKey) {
+    return vaultyRegistry;
+  }
+  return buildCandidateRegistry(scope, scopeKey);
+}
+
 function findByLabel(text) {
   const labels = Array.from(document.querySelectorAll("label"));
   const wanted = norm(text);
@@ -1196,6 +1486,224 @@ function findByIndex(index, type = "field") {
     return allElements[index] || null;
   }
   return null;
+}
+
+function isTopmost(el) {
+  try {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return false;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+    const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+    const topEl = document.elementFromPoint(x, y);
+    return topEl === el || el.contains(topEl);
+  } catch (e) {
+    return false;
+  }
+}
+
+function computeTextMatchScore(targetText, candidate) {
+  if (!targetText) return { score: 0, reason: null };
+  const pool = [candidate.text, candidate.ariaLabel, candidate.label].filter(Boolean).map(norm);
+  const exactTargets = [];
+  const containsTargets = [];
+
+  if (typeof targetText === "string") {
+    exactTargets.push(targetText);
+  } else {
+    if (targetText.exact) exactTargets.push(targetText.exact);
+    if (Array.isArray(targetText.contains)) containsTargets.push(...targetText.contains);
+  }
+
+  for (const exact of exactTargets) {
+    const wanted = norm(exact);
+    if (pool.some(t => t === wanted)) return { score: 1, reason: "text:exact" };
+  }
+  for (const part of containsTargets) {
+    const wanted = norm(part);
+    if (pool.some(t => t.includes(wanted))) return { score: 0.7, reason: "text:contains" };
+  }
+
+  return { score: 0, reason: null };
+}
+
+function computeLabelMatchScore(targetLabel, candidate) {
+  if (!targetLabel || !candidate.label) return { score: 0, reason: null };
+  const wanted = norm(targetLabel);
+  const label = norm(candidate.label);
+  if (label === wanted) return { score: 1, reason: "label:exact" };
+  if (label.includes(wanted) || wanted.includes(label)) return { score: 0.7, reason: "label:contains" };
+  return { score: 0, reason: null };
+}
+
+function computeRoleMatchScore(targetRole, candidate) {
+  if (!targetRole) return { score: 0, reason: null };
+  if (norm(targetRole) === norm(candidate.role)) return { score: 1, reason: "role" };
+  return { score: 0, reason: null };
+}
+
+function computeAttributeMatchScore(targetAttributes, candidate) {
+  if (!targetAttributes) return { score: 0, reason: null };
+  let score = 0;
+  let reason = null;
+  if (targetAttributes.id && candidate.attributes.id === targetAttributes.id) {
+    score = 1;
+    reason = "attr:id";
+  }
+  if (targetAttributes.dataTestId && candidate.attributes.dataTestId === targetAttributes.dataTestId) {
+    score = Math.max(score, 1);
+    reason = "attr:data-testid";
+  }
+  if (targetAttributes.name && candidate.attributes.name === targetAttributes.name) {
+    score = Math.max(score, 0.7);
+    reason = reason || "attr:name";
+  }
+  return { score, reason };
+}
+
+function computeContextMatchScore(targetContext, candidate) {
+  if (!targetContext) return { score: 0, reason: null };
+  let score = 0;
+  let reason = null;
+
+  if (targetContext.form && candidate.formId) {
+    const wanted = norm(targetContext.form);
+    const formId = norm(candidate.formId);
+    if (formId && (formId === wanted || formId.includes(wanted))) {
+      score = 1;
+      reason = "context:form";
+    }
+  }
+
+  if (targetContext.section && candidate.sectionHeading) {
+    const wanted = norm(targetContext.section);
+    const section = norm(candidate.sectionHeading);
+    if (section && (section === wanted || section.includes(wanted))) {
+      score = Math.max(score, 0.7);
+      reason = reason || "context:section";
+    }
+  }
+
+  if (targetContext.modalTitle && candidate.context === "MODAL") {
+    score = Math.max(score, 0.6);
+    reason = reason || "context:modal";
+  }
+
+  return { score, reason };
+}
+
+function computeCandidateScore(target, candidate) {
+  const reasons = [];
+  const textScore = computeTextMatchScore(target.text, candidate);
+  const roleScore = computeRoleMatchScore(target.role, candidate);
+  const labelScore = computeLabelMatchScore(target.label, candidate);
+  const attrScore = computeAttributeMatchScore(target.attributes, candidate);
+  const ctxScore = computeContextMatchScore(target.context, candidate);
+  const visibilityScore = candidate.visibility.isVisible && candidate.visibility.isEnabled ? 1 : 0;
+
+  if (textScore.score) reasons.push(textScore.reason);
+  if (roleScore.score) reasons.push(roleScore.reason);
+  if (labelScore.score) reasons.push(labelScore.reason);
+  if (attrScore.score) reasons.push(attrScore.reason);
+  if (ctxScore.score) reasons.push(ctxScore.reason);
+  if (visibilityScore) reasons.push("visible");
+
+  const score =
+    0.40 * textScore.score +
+    0.20 * roleScore.score +
+    0.15 * labelScore.score +
+    0.10 * attrScore.score +
+    0.10 * ctxScore.score +
+    0.05 * visibilityScore;
+
+  return { score, reasons };
+}
+
+function resolveByVaultyId(vaultyId, registry) {
+  if (!vaultyId) return null;
+  if (vaultyId.startsWith("id:")) {
+    const id = vaultyId.slice(3);
+    const el = document.getElementById(id);
+    if (el) return el;
+  }
+  if (registry?.elementMap?.has(vaultyId)) {
+    const el = registry.elementMap.get(vaultyId);
+    if (el && el.isConnected) return el;
+  }
+  const selector = `[${VAULTY_ID_ATTR}="${cssEscapeSafe(vaultyId)}"]`;
+  return document.querySelector(selector);
+}
+
+function resolveTargetV2(target, registry) {
+  const trace = {
+    method: target?.by || "unknown",
+    candidatesTotal: registry?.candidates?.length || 0
+  };
+  if (!target) {
+    trace.failureReason = "no_target";
+    return { element: null, trace };
+  }
+
+  if (target.by === "vaultyId") {
+    trace.vaultyId = target.id;
+    const el = resolveByVaultyId(target.id, registry);
+    if (!el) {
+      trace.failureReason = "vaultyId_not_found";
+      return { element: null, trace };
+    }
+    return { element: el, trace, candidate: registry?.candidateById?.get(target.id) || null };
+  }
+
+  if (target.by === "intent") {
+    if (!registry || !registry.candidates) {
+      trace.failureReason = "no_registry";
+      return { element: null, trace };
+    }
+    const constraints = target.constraints || {};
+    const scored = [];
+
+    for (const candidate of registry.candidates) {
+      if (constraints.mustBeVisible && !candidate.visibility.isVisible) continue;
+      if (constraints.mustBeEnabled && !candidate.visibility.isEnabled) continue;
+      if (constraints.mustBeTopmost) {
+        const el = registry.elementMap.get(candidate.vaultyId);
+        if (!el || !isTopmost(el)) continue;
+      }
+
+      const result = computeCandidateScore(target, candidate);
+      scored.push({ candidate, score: result.score, reasons: result.reasons });
+    }
+
+    trace.candidatesAfterFilter = scored.length;
+    scored.sort((a, b) => b.score - a.score);
+    trace.topMatches = scored.slice(0, 3).map(s => ({
+      vaultyId: s.candidate.vaultyId,
+      score: Number(s.score.toFixed(2)),
+      reasons: s.reasons
+    }));
+
+    const best = scored[0];
+    if (!best || best.score < 0.45) {
+      trace.failureReason = "score_below_threshold";
+      return { element: null, trace };
+    }
+
+    if (scored[1] && Math.abs(best.score - scored[1].score) <= 0.05) {
+      trace.note = "close_scores";
+    }
+
+    const el = registry.elementMap.get(best.candidate.vaultyId);
+    if (!el) {
+      trace.failureReason = "element_missing";
+      return { element: null, trace };
+    }
+
+    trace.chosen = best.candidate.vaultyId;
+    return { element: el, trace, candidate: best.candidate };
+  }
+
+  const el = resolveTarget(target);
+  if (!el) trace.failureReason = "legacy_not_found";
+  return { element: el, trace };
 }
 
 function resolveTarget(target) {
@@ -1352,6 +1860,8 @@ function observe() {
   // Detect if there's an active modal
   const activeModal = detectActiveModal();
   const scope = activeModal?.element || document;
+  const scopeKey = activeModal ? `MODAL:${activeModal.title || "unknown"}` : "PAGE";
+  const registry = getCandidateRegistry({ scope, scopeKey, force: true });
   
   // Extract elements - scoped to modal if one is active
   const fields = extractFormFields(scope);
@@ -1380,12 +1890,39 @@ function observe() {
     // Modal awareness
     hasActiveModal: !!activeModal,
     modalTitle: activeModal?.title || null,
+    candidates: registry.publicCandidates,
+    registryVersion: registry.version,
     // Legacy field for backward compatibility
     text: pageContext,
     // Route tracking info
     routeVersion,
     lastNavAt
   };
+}
+
+function needsRegistryForTarget(target) {
+  return !!target && (target.by === "vaultyId" || target.by === "intent");
+}
+
+function resolveTargetForAction(action, options = {}) {
+  const target = action?.target;
+  const activeModal = detectActiveModal();
+  const scope = activeModal?.element || document;
+  const scopeKey = activeModal ? `MODAL:${activeModal.title || "unknown"}` : "PAGE";
+  let registry = null;
+
+  if (options.forceRegistry || needsRegistryForTarget(target)) {
+    registry = getCandidateRegistry({ scope, scopeKey, force: options.forceRegistry === true });
+  }
+
+  let resolved = resolveTargetV2(target, registry);
+  if (!resolved.element && registry && resolved.trace?.failureReason === "vaultyId_not_found" && !options.forceRegistry) {
+    registry = getCandidateRegistry({ scope, scopeKey, force: true });
+    resolved = resolveTargetV2(target, registry);
+    if (resolved.trace) resolved.trace.refreshed = true;
+  }
+
+  return { ...resolved, registry };
 }
 
 async function execute(action) {
@@ -1436,17 +1973,29 @@ async function execute(action) {
     if (action.type === "WAIT_FOR") {
       const timeout = action.timeoutMs ?? 15000;
       const start = Date.now();
+      let lastRefresh = 0;
       while (Date.now() - start < timeout) {
-        const el = resolveTarget(action.target);
-        if (el) return { ok: true };
+        const forceRegistry = Date.now() - lastRefresh > 1000;
+        const resolved = resolveTargetForAction(action, { forceRegistry });
+        if (forceRegistry) lastRefresh = Date.now();
+        if (resolved.element) return { ok: true };
         await new Promise(r => setTimeout(r, 250));
       }
       return { ok: false, fatal: false, error: "WAIT_FOR timeout" };
     }
 
+    if (action.type === "REFRESH_REGISTRY") {
+      const activeModal = detectActiveModal();
+      const scope = activeModal?.element || document;
+      const scopeKey = activeModal ? `MODAL:${activeModal.title || "unknown"}` : "PAGE";
+      const registry = getCandidateRegistry({ scope, scopeKey, force: true });
+      return { ok: true, note: "registry refreshed", registryVersion: registry.version };
+    }
+
     if (action.type === "CLICK") {
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "CLICK target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "CLICK target not found", resolutionTrace: resolved.trace };
       highlight(el);
 
       // Use efficient click method
@@ -1455,8 +2004,9 @@ async function execute(action) {
     }
 
     if (action.type === "FILL") {
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "FILL target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "FILL target not found", resolutionTrace: resolved.trace };
       
       // Prevent filling file inputs - they can only be set via UPLOAD_FILE action
       if (el.type === "file") {
@@ -1485,8 +2035,9 @@ async function execute(action) {
     }
 
     if (action.type === "SELECT") {
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "SELECT target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "SELECT target not found", resolutionTrace: resolved.trace };
       highlight(el);
       el.value = action.value;
       el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1495,8 +2046,9 @@ async function execute(action) {
 
     if (action.type === "SELECT_CUSTOM") {
       // Handle custom dropdown/combobox selection (div-based, not native <select>)
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "SELECT_CUSTOM target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "SELECT_CUSTOM target not found", resolutionTrace: resolved.trace };
       
       highlight(el);
       const targetValue = action.value;
@@ -1583,8 +2135,9 @@ async function execute(action) {
     }
 
     if (action.type === "CHECK") {
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "CHECK target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "CHECK target not found", resolutionTrace: resolved.trace };
       highlight(el);
       
       // Efficient checkbox/radio handling
@@ -1603,8 +2156,9 @@ async function execute(action) {
 
     if (action.type === "UPLOAD_FILE") {
       // Find the file input element
-      const el = resolveTarget(action.target);
-      if (!el) return { ok: false, fatal: false, error: "UPLOAD_FILE target not found" };
+      const resolved = resolveTargetForAction(action);
+      const el = resolved.element;
+      if (!el) return { ok: false, fatal: false, error: "UPLOAD_FILE target not found", resolutionTrace: resolved.trace };
       if (el.tagName !== "INPUT" || el.type !== "file") {
         return { ok: false, fatal: false, error: "Target is not a file input" };
       }
