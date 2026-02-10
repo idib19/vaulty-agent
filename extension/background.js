@@ -348,6 +348,15 @@ function createInitialApplicationState(startUrl, jobTitle, company) {
       description: null,
       attemptsMade: 0,
     },
+    auth: {
+      strategy: null,          // null | 'login' | 'signup' | 'oauth'
+      onAuthPage: false,
+      loginAttempts: 0,
+      loginErrors: [],         // e.g. ["Invalid email address or password"]
+      signupAttempted: false,
+      strategyDecidedAtStep: null,
+      pivotReason: null,       // Why we switched strategy (e.g. "login failed")
+    },
     memory: {
       successfulPatterns: [],
       failedPatterns: [],
@@ -449,6 +458,113 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
   newState.progress.estimatedProgress = Math.min(100, phaseProgress + fieldsProgress);
   
   return newState;
+}
+
+// ============================================================
+// AUTH STATE DETECTION - Detect login/signup pages and login failures
+// ============================================================
+function detectAuthState(observation, lastAction, lastResult, prevAuth, step) {
+  const auth = JSON.parse(JSON.stringify(prevAuth || {
+    strategy: null,
+    onAuthPage: false,
+    loginAttempts: 0,
+    loginErrors: [],
+    signupAttempted: false,
+    strategyDecidedAtStep: null,
+    pivotReason: null,
+  }));
+
+  const pageText = (observation?.pageContext || '').toLowerCase();
+  const url = (observation?.url || '').toLowerCase();
+
+  // --- Detect if we're on an auth page ---
+  const loginIndicators = ['sign in', 'log in', 'login', 'signin', 'email address and password', 'enter your password'];
+  const signupIndicators = ['create account', 'register', 'sign up', 'signup', 'new account', 'create a new account', 'create an account'];
+
+  const hasLoginForm = observation?.specialElements?.hasPasswordField ||
+    loginIndicators.some(k => pageText.includes(k));
+  const hasSignupOption = signupIndicators.some(k => pageText.includes(k)) ||
+    (observation?.buttons || []).some(b => signupIndicators.some(k =>
+      (b.text || '').toLowerCase().includes(k)));
+
+  auth.onAuthPage = hasLoginForm || hasSignupOption;
+
+  // --- Set initial strategy if not yet decided ---
+  if (auth.onAuthPage && auth.strategy === null) {
+    // For job application sites, default to signup unless login-only page
+    if (hasSignupOption) {
+      auth.strategy = 'signup';
+      console.log(`[auth] 📋 Initial strategy: SIGNUP (create account option available)`);
+    } else if (hasLoginForm) {
+      auth.strategy = 'login';
+      console.log(`[auth] 📋 Initial strategy: LOGIN (no signup option visible yet)`);
+    }
+    auth.strategyDecidedAtStep = step;
+  }
+
+  // --- Detect login failure errors ---
+  const loginErrorKeywords = [
+    'invalid email', 'invalid password', 'incorrect password',
+    'email or password', 'wrong password', 'account not found',
+    'no account', 'does not exist', 'authentication failed',
+    'login failed', 'unable to sign in', 'unrecognized email',
+    "we couldn't find", "doesn't match", "could not sign in",
+    'invalid credentials', 'please check your credentials',
+    'email address is required', 'password is required',
+  ];
+
+  // Also check field-level validation errors for auth-related messages
+  const fieldErrors = (observation?.fields || [])
+    .filter(f => f.hasError && f.errorMessage)
+    .map(f => f.errorMessage.toLowerCase());
+
+  // Scan both page text and field errors
+  const allText = pageText + ' ' + fieldErrors.join(' ');
+
+  for (const keyword of loginErrorKeywords) {
+    if (allText.includes(keyword) && !auth.loginErrors.includes(keyword)) {
+      auth.loginErrors.push(keyword);
+      // Only increment loginAttempts when a NEW error is found
+      // and we were actually trying to login
+      if (auth.strategy === 'login') {
+        auth.loginAttempts++;
+        console.log(`[auth] ⚠️ Login error detected: "${keyword}" (attempt #${auth.loginAttempts})`);
+      }
+    }
+  }
+
+  // --- AUTO-PIVOT: If login was tried and failed, switch to signup ---
+  if (auth.strategy === 'login' && auth.loginAttempts >= 1) {
+    if (hasSignupOption) {
+      auth.strategy = 'signup';
+      auth.pivotReason = `Login failed: "${auth.loginErrors[auth.loginErrors.length - 1]}"`;
+      console.log(`[auth] 🔄 STRATEGY PIVOT: login → signup (reason: ${auth.pivotReason})`);
+    } else {
+      // No signup option visible - try OAuth or ask user
+      const hasOAuth = observation?.specialElements?.hasOAuthButtons?.length > 0;
+      if (hasOAuth) {
+        auth.strategy = 'oauth';
+        auth.pivotReason = `Login failed and no signup option visible, trying OAuth`;
+        console.log(`[auth] 🔄 STRATEGY PIVOT: login → oauth (reason: ${auth.pivotReason})`);
+      }
+      // If no signup AND no oauth, the circuit breaker in the main loop will ASK_USER
+    }
+  }
+
+  // --- Detect stalled login: too many fill actions on auth page ---
+  // If we've been on an auth page for many steps with login strategy and no pivot yet
+  if (auth.strategy === 'login' && auth.onAuthPage &&
+      auth.strategyDecidedAtStep !== null &&
+      (step - auth.strategyDecidedAtStep) > 10) {
+    // We've been trying to login for 10+ steps without success
+    if (hasSignupOption && auth.pivotReason === null) {
+      auth.strategy = 'signup';
+      auth.pivotReason = `Stuck on login page for ${step - auth.strategyDecidedAtStep} steps without progress`;
+      console.log(`[auth] 🔄 STALL PIVOT: login → signup (${auth.pivotReason})`);
+    }
+  }
+
+  return auth;
 }
 
 // Wait for user response to ASK_USER action
@@ -589,21 +705,23 @@ function detectLoop(actionHistory, currentObservation) {
     const normalizedCurrent = normalizeUrl(currentUrl);
     const allOnSamePage = urls.length >= 3 && urls.every(u => normalizeUrl(u) === normalizedCurrent);
     
-    // Check if we're repeating similar action types
+    // Check if we're repeating similar action types (CLICK or FILL)
     const actionTypes = recentForSemantic.map(h => h.action?.type);
     const allClicks = actionTypes.every(t => t === 'CLICK');
+    const allSameType = actionTypes.every(t => t === actionTypes[0]);
+    const allClicksOrFills = actionTypes.every(t => ['CLICK', 'FILL'].includes(t));
     
-    // Check if we're clicking similar targets
+    // Check if we're interacting with similar targets
     const targets = recentForSemantic.map(h => {
       const t = h.action?.target;
-      return t?.text || t?.index?.toString() || '';
+      return t?.text || t?.id || t?.index?.toString() || '';
     });
     const uniqueTargets = [...new Set(targets)];
     const limitedTargetVariety = uniqueTargets.length <= 2; // Only 1-2 different targets
     
-    console.log(`[loop-detection] Semantic check: samePage=${allOnSamePage}, allClicks=${allClicks}, limitedTargets=${limitedTargetVariety}`);
+    console.log(`[loop-detection] Semantic check: samePage=${allOnSamePage}, allClicks=${allClicks}, allClicksOrFills=${allClicksOrFills}, limitedTargets=${limitedTargetVariety}`);
     
-    if (allOnSamePage && allClicks && limitedTargetVariety) {
+    if (allOnSamePage && (allClicks || (allClicksOrFills && limitedTargetVariety)) && limitedTargetVariety) {
       const lastAction = recentForSemantic[recentForSemantic.length - 1].action;
       const targetDesc = describeTarget(lastAction?.target) || "unknown";
       const clickedIndex = lastAction?.target?.index;
@@ -626,33 +744,95 @@ function detectLoop(actionHistory, currentObservation) {
     }
   }
   
-  // === CHECK 3: FILL LOOP - repeatedly filling the same field ===
-  // Detect when we're filling the same field over and over (e.g., password field with validation errors)
+  // === CHECK 3: FILL LOOP (BROADENED) - repeatedly filling form fields ===
+  // Detect when we're filling the same field(s) over and over
+  // Fixed: now detects loops even when alternating between multiple targets (e.g., username + password)
   const recentForFill = actionHistory.slice(-5); // Last 5 actions
   if (recentForFill.length >= 3) {
     const fillActions = recentForFill.filter(h => h.action?.type === 'FILL');
     
     if (fillActions.length >= 3) {
-      // Check if all FILL actions target the same field
       const fillTargets = fillActions.map(h => describeTarget(h.action?.target));
-      const uniqueFillTargets = [...new Set(fillTargets)];
+      const uniqueFillTargets = [...new Set(fillTargets.filter(Boolean))];
       
-      console.log(`[loop-detection] Fill check: ${fillActions.length} FILL actions, targets: ${uniqueFillTargets.join(', ')}`);
+      // Count how many times each target was filled
+      const targetCounts = {};
+      for (const t of fillTargets) {
+        if (t) targetCounts[t] = (targetCounts[t] || 0) + 1;
+      }
+      const mostRepeated = Object.entries(targetCounts).sort((a, b) => b[1] - a[1])[0];
       
-      // If 3+ FILLs on the same target
-      if (uniqueFillTargets.length === 1 && uniqueFillTargets[0] !== '') {
+      console.log(`[loop-detection] Fill check: ${fillActions.length} FILL actions, targets: ${uniqueFillTargets.join(', ')}, most repeated: ${mostRepeated ? `"${mostRepeated[0]}" x${mostRepeated[1]}` : 'none'}`);
+      
+      // CASE A: Single target filled 3+ times (original check)
+      const singleTargetLoop = mostRepeated && mostRepeated[1] >= 3;
+      
+      // CASE B: 4+ fills total across 1-2 targets on same page (e.g., alternating username/password)
+      const multiTargetLoop = fillActions.length >= 4 && uniqueFillTargets.length <= 2;
+      
+      // CASE C: 3+ fills on 1-2 targets (catches the username/password alternation earlier)
+      const alternatingLoop = fillActions.length >= 3 && uniqueFillTargets.length <= 2 && 
+                              uniqueFillTargets.length > 0;
+      
+      if (singleTargetLoop || multiTargetLoop || alternatingLoop) {
         const lastFill = fillActions[fillActions.length - 1].action;
-        const targetDesc = describeTarget(lastFill?.target) || "unknown";
+        const targetDesc = singleTargetLoop 
+          ? mostRepeated[0] 
+          : uniqueFillTargets.join(', ');
         
-        console.log(`[loop-detection] ✅ FILL LOOP DETECTED: Repeatedly filling "${targetDesc}" (${fillActions.length} times)`);
+        const reason = singleTargetLoop
+          ? `single field "${mostRepeated[0]}" filled ${mostRepeated[1]}x`
+          : `alternating fills on ${uniqueFillTargets.length} fields (${fillActions.length} total)`;
+        
+        console.log(`[loop-detection] ✅ FILL LOOP DETECTED: ${reason}`);
         
         return {
           isLoop: true,
           loopType: 'fill',
           failedAction: lastFill,
           failCount: fillActions.length,
-          error: 'Agent stuck - repeatedly filling the same field without progress (possible validation error)',
+          error: `Agent stuck - repeatedly filling form fields without progress (${reason})`,
           targetDescription: `repeated fills on: ${targetDesc}`
+        };
+      }
+    }
+  }
+  
+  // === CHECK 4: PROGRESS STALL - no progress in many steps ===
+  // Detect when all actions succeed but nothing changes (same page, same targets, no navigation)
+  if (actionHistory.length >= 8) {
+    const recent8 = actionHistory.slice(-8);
+    const allSucceeded = recent8.every(h => h.result?.ok !== false);
+    
+    // Check if all actions are on the same page
+    const urls = recent8.map(h => h.url).filter(Boolean);
+    const uniqueUrls = [...new Set(urls.map(u => {
+      try { const urlObj = new URL(u); return urlObj.origin + urlObj.pathname; }
+      catch { return u; }
+    }))];
+    const samePage = uniqueUrls.length <= 1;
+    
+    // Check if only FILL/CLICK actions (not NAVIGATE, ASK_USER, etc.)
+    const actionTypes = recent8.map(h => h.action?.type);
+    const onlyFillAndClick = actionTypes.every(t => ['FILL', 'CLICK'].includes(t));
+    
+    if (allSucceeded && samePage && onlyFillAndClick) {
+      // Check if we're cycling between limited targets
+      const targets = recent8.map(h => describeTarget(h.action?.target));
+      const uniqueTargets = [...new Set(targets.filter(Boolean))];
+      
+      if (uniqueTargets.length <= 3) { // Only 2-3 different targets in 8 actions
+        console.log(`[loop-detection] ✅ STALL DETECTED: ${recent8.length} successful actions on same page, ` +
+                    `only ${uniqueTargets.length} unique targets, no progress`);
+        
+        return {
+          isLoop: true,
+          loopType: 'stall',
+          failedAction: recent8[recent8.length - 1].action,
+          failCount: recent8.length,
+          error: `Agent stalled: ${recent8.length} actions on same page cycling between ` +
+                 `${uniqueTargets.join(', ')} with no progress`,
+          targetDescription: `stalled on: ${uniqueTargets.join(', ')}`
         };
       }
     }
@@ -906,6 +1086,12 @@ async function agentLoop({ jobId, startUrl, mode }) {
     // UPDATE APPLICATION STATE
     // ============================================================
     applicationState = updateApplicationState(applicationState, observation, lastAction, lastResult);
+    
+    // ============================================================
+    // AUTH STATE DETECTION - Detect login pages and login failures
+    // ============================================================
+    applicationState.auth = detectAuthState(observation, lastAction, lastResult, applicationState.auth, step);
+    
     await setJob(jobId, { applicationState });
     
     // ============================================================
@@ -1398,6 +1584,106 @@ async function agentLoop({ jobId, startUrl, mode }) {
     let fieldName = plannerResponse.fieldName || null; // For HUD display
     let screenshot = null;
     let loopDetected = false;
+    
+    // ============================================================
+    // AUTH STRATEGY CIRCUIT BREAKER
+    // ============================================================
+    // If auth detection says we need to pivot to signup, override the planner
+    // This is a hardcoded rule that doesn't rely on LLM judgment
+    if (applicationState.auth?.strategy === 'signup' && applicationState.auth?.pivotReason &&
+        applicationState.auth?.onAuthPage) {
+      
+      // Check if the planner is still trying to do login actions (FILL on login fields or CLICK sign-in)
+      // Handle both direct id and vaultyId-based targets (e.g., id: "id:username")
+      const targetId = (action.target?.id || action.target?.selector || '').toLowerCase();
+      const targetText = (action.target?.text || '').toLowerCase();
+      
+      const isLoginAction = action.type === 'FILL' && (
+        targetId.includes('username') ||
+        targetId.includes('email') ||
+        targetId.includes('password') ||
+        targetId.includes('signin') ||
+        targetId.includes('login')
+      );
+      const isSignInClick = action.type === 'CLICK' && (
+        targetId.includes('signin') ||
+        targetId.includes('sign-in') ||
+        targetId.includes('login') ||
+        targetId.includes('sign_in') ||
+        targetText.includes('sign in') ||
+        targetText.includes('log in') ||
+        targetText.includes('login') ||
+        targetText.includes('signin')
+      );
+      
+      if (isLoginAction || isSignInClick) {
+        console.log(`[auth] 🚫 CIRCUIT BREAKER: Planner wants to ${action.type} on auth field, but strategy is SIGNUP`);
+        console.log(`[auth] Pivot reason: ${applicationState.auth.pivotReason}`);
+        
+        // Scan buttons for signup/register options
+        const signupKeywords = ['create account', 'register', 'sign up', 'signup', 'new account', 
+                                'create a new account', 'create an account', 'don\'t have an account',
+                                'new user', 'create one'];
+        
+        const signupButton = (observation?.buttons || []).find(b => {
+          const text = (b.text || '').toLowerCase();
+          return signupKeywords.some(k => text.includes(k));
+        });
+        
+        // Also check candidates registry for signup links/buttons
+        const signupCandidate = (observation?.candidates || []).find(c => {
+          const text = (c.text || c.innerText || c.ariaLabel || '').toLowerCase();
+          return signupKeywords.some(k => text.includes(k));
+        });
+        
+        if (signupButton) {
+          const target = signupButton.vaultyId 
+            ? { by: 'vaultyId', id: signupButton.vaultyId }
+            : { by: 'text', text: signupButton.text };
+          
+          action = { type: 'CLICK', target };
+          thinking = `🔄 Auth strategy pivot: Login failed ("${applicationState.auth.loginErrors.join(', ')}"). ` +
+                     `Switching to account creation. Clicking "${signupButton.text}".`;
+          confidence = 0.9;
+          
+          console.log(`[auth] ✅ Overriding to CLICK signup button: "${signupButton.text}"`);
+          
+          await addLog(jobId, step, {
+            type: "auth_pivot",
+            message: `Auth circuit breaker: login→signup, clicking "${signupButton.text}"`,
+            pivotReason: applicationState.auth.pivotReason,
+            loginErrors: applicationState.auth.loginErrors,
+          });
+        } else if (signupCandidate) {
+          const target = signupCandidate.vaultyId 
+            ? { by: 'vaultyId', id: signupCandidate.vaultyId }
+            : { by: 'text', text: signupCandidate.text || signupCandidate.innerText };
+          
+          action = { type: 'CLICK', target };
+          thinking = `🔄 Auth strategy pivot: Login failed. Clicking "${signupCandidate.text || signupCandidate.innerText}" to create account.`;
+          confidence = 0.85;
+          
+          console.log(`[auth] ✅ Overriding to CLICK signup candidate: "${signupCandidate.text || signupCandidate.innerText}"`);
+        } else {
+          // No signup button found - ask the user
+          console.log(`[auth] ⚠️ No signup button found on page. Asking user for help.`);
+          
+          action = {
+            type: "ASK_USER",
+            question: `I tried to sign in but got an error: "${applicationState.auth.loginErrors.join(', ')}". ` +
+                      `I can't find a "Create Account" or "Register" button on this page. Can you help?`,
+            options: [
+              { id: "create_account", label: "I'll navigate to the registration page" },
+              { id: "correct_credentials", label: "Let me provide the correct login credentials" },
+              { id: "manual", label: "Let me handle this manually" }
+            ],
+            allowCustom: true
+          };
+          thinking = `Login failed and no signup option found. Asking user for help.`;
+          confidence = 0.4;
+        }
+      }
+    }
     
     // Check for loop BEFORE executing the action (pass observation for semantic detection)
     const loopInfo = detectLoop(actionHistory, observation);
@@ -2224,6 +2510,15 @@ async function handleExternalJobStart(payload, source) {
       type: null,
       description: null,
       attemptsMade: 0,
+    },
+    auth: {
+      strategy: null,
+      onAuthPage: false,
+      loginAttempts: 0,
+      loginErrors: [],
+      signupAttempted: false,
+      strategyDecidedAtStep: null,
+      pivotReason: null,
     },
     memory: {
       successfulPatterns: [],

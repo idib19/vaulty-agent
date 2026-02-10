@@ -221,10 +221,21 @@ export interface ExternalJobData {
 }
 
 // Full application state - the "brain" of the agent
+export interface AuthState {
+  strategy: 'login' | 'signup' | 'oauth' | null;
+  onAuthPage: boolean;
+  loginAttempts: number;
+  loginErrors: string[];
+  signupAttempted: boolean;
+  strategyDecidedAtStep: number | null;
+  pivotReason: string | null;
+}
+
 export interface ApplicationState {
   goal: ApplicationGoal;
   progress: ApplicationProgress;
   blockers: ApplicationBlocker;
+  auth?: AuthState; // Authentication strategy tracking
   memory: ApplicationMemory;
   external?: ExternalJobData; // Data from external app
 }

@@ -250,7 +250,7 @@ export async function POST(request: NextRequest) {
         failCount: body.loopContext?.failCount,
         error: body.loopContext?.error
       });
-        visionPrompt = buildVisionPrompt(observation, profile, body.step, body.loopContext);
+        visionPrompt = buildVisionPrompt(observation, profile, body.step, body.loopContext, applicationState);
       }
       
       console.log(`[Planner] 📝 Vision prompt length: ${visionPrompt.length} chars`);

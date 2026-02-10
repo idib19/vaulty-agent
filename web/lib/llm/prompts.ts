@@ -169,6 +169,7 @@ export function buildGoalContext(state: ApplicationState | undefined): string {
   if (!state) return "";
   
   const { goal, progress, blockers, memory } = state;
+  const auth = state.auth;
   
   let context = `
 ═══════════════════════════════════════════════════════════════
@@ -185,6 +186,30 @@ FOCUS RULES (CRITICAL):
 - FOCUS: Application form fields, login/signup if required, next/continue/submit buttons
 - GOAL: Successfully submit THIS job application - never apply to a different position
 `;
+
+  // Add auth context (HIGHEST PRIORITY when relevant)
+  if (auth?.loginAttempts && auth.loginAttempts > 0) {
+    context += `
+🚨🚨🚨 AUTHENTICATION ALERT 🚨🚨🚨
+Login was attempted ${auth.loginAttempts} time(s) and FAILED.
+Error(s): ${auth.loginErrors.join('; ')}
+Current strategy: ${auth.strategy?.toUpperCase() || 'UNKNOWN'}
+${auth.strategy === 'signup'
+  ? `→ You MUST create a new account. Look for "Create Account" / "Register" / "Sign Up" button.
+→ DO NOT fill the sign-in form again. DO NOT retry login.`
+  : auth.strategy === 'oauth'
+    ? `→ Try OAuth options ("Continue with Google", "Sign in with LinkedIn", etc.)`
+    : `→ Do NOT retry login with the same credentials.`}
+🚨🚨🚨 DO NOT ATTEMPT TO SIGN IN AGAIN 🚨🚨🚨
+`;
+  } else if (auth?.onAuthPage && auth?.strategy === 'signup') {
+    context += `
+🔑 AUTH STRATEGY: CREATE NEW ACCOUNT
+→ On job application sites, you need to create a new account.
+→ Look for "Create Account" / "Register" / "Sign Up" buttons.
+→ The saved credentials (email + password) are for account creation.
+`;
+  }
 
   // Add blocker awareness
   if (blockers.type) {
@@ -369,10 +394,15 @@ Use ASK_USER when:
 - You need clarification on ambiguous form questions (e.g., "Are you authorized to work?" when not in profile)
 
 JOB APPLICATION SPECIFICS
-- Login vs signup:
-  - If a login form is present and the profile has email+password, login.
-  - If the site requires account creation, sign up using profile email/password.
-  - If there is a "confirm password" field, fill it with the same password.
+- Login vs signup (CRITICAL FOR JOB SITES):
+  - On employer career portals, you almost always need to CREATE A NEW ACCOUNT.
+  - The saved email+password in the profile are for CREATING new accounts, not for logging into existing ones.
+  - If you see BOTH "Sign In" and "Create Account"/"Register"/"Sign Up" options:
+    → PREFER "Create Account" / "Register" / "Sign Up" UNLESS the AUTH CONTEXT below says otherwise.
+  - If you attempt to sign in and see ANY error ("invalid email", "wrong password", "account not found"):
+    → IMMEDIATELY switch to creating an account. Do NOT retry sign-in with the same credentials.
+  - If there is a "Confirm Password" field, you are on a REGISTRATION page - proceed with signup.
+  - Only attempt login if there is NO signup option available on the page.
   - If password is missing and a password field is required, request PASSWORD verification.
 - OAuth:
   - If the user prefers OAuth and a "Continue with Google" style option exists, click it and then request OAUTH verification.
@@ -939,12 +969,14 @@ Continue the job application process by identifying the next actionable step. Th
 
 PRIORITY ORDER FOR ACTIONS:
 1. DISMISS BLOCKERS FIRST: Cookie banners, popups, modals, overlays - click "Accept", "Close", "X", or "Dismiss"
-2. LOGIN (if credentials available): Fill email/password fields and click login/sign-in button
-3. OAUTH (if no credentials or login fails): Click "Continue with Google/LinkedIn" buttons
-4. SIGNUP (if no account exists): Fill registration form fields
+2. CREATE ACCOUNT / SIGNUP (default for job sites): On career portals you almost always need a NEW account. Look for "Create Account", "Register", "Sign Up" buttons.
+3. LOGIN (only if AUTH CONTEXT says "known account" or no signup option exists): Fill email/password and click sign-in
+4. OAUTH (if user prefers or login fails): Click "Continue with Google/LinkedIn" buttons
 5. FILL FORM FIELDS: Fill empty required fields (name, email, phone, etc.)
 6. NAVIGATE: Click "Next", "Continue", "Apply", "Submit" buttons
 7. COMPLETE: Look for confirmation messages indicating success
+
+⚠️ CRITICAL: If you see "Invalid email or password" or similar login errors, do NOT retry sign-in. Switch to creating a new account immediately.
 
 WHAT TO LOOK FOR IN THE SCREENSHOT:
 - Login/Sign-in forms with email and password fields
@@ -1120,24 +1152,36 @@ export function buildVisionPrompt(
   observation: PageObservation,
   profile: UserProfile,
   step: number,
-  loopContext?: LoopContext
+  loopContext?: LoopContext,
+  applicationState?: ApplicationState
 ): string {
   const profileContext = profileToContext(profile);
   const failedAction = loopContext?.failedAction;
   const failedTarget = failedAction?.target?.text || failedAction?.target?.selector || "unknown";
   const candidatesText = formatCandidateRegistry(observation.candidates);
   
-  // Determine credentials status
+  // Determine credentials status (auth-aware)
   const hasEmail = !!profileContext["email"];
   const hasPassword = !!profileContext["password"];
   const hasCredentials = hasEmail && hasPassword;
   const prefersOAuth = profile.preferOAuth === true;
+  const authState = applicationState?.auth;
   
-  // Build credentials status message
+  // Build credentials status message - now auth-aware
   let credentialsStatus = "";
-  if (hasCredentials) {
-    credentialsStatus = `✓ User has login credentials (email: ${profileContext["email"]}, password: available)
-→ PRIORITY: Try to LOGIN with these credentials first`;
+  if (authState?.loginAttempts && authState.loginAttempts > 0) {
+    // LOGIN ALREADY FAILED - highest priority message
+    credentialsStatus = `🚨 LOGIN ALREADY FAILED (${authState.loginAttempts}x)
+→ Error(s): "${authState.loginErrors.join(', ')}"
+→ Strategy: ${authState.strategy?.toUpperCase() || 'UNKNOWN'}
+→ DO NOT try to sign in again with the same credentials.
+→ LOOK FOR: "Create Account", "Register", "Sign Up" button
+→ Use the saved email+password to CREATE a new account instead`;
+  } else if (hasCredentials) {
+    credentialsStatus = `✓ User has credentials (email: ${profileContext["email"]}, password: available)
+→ These are for CREATING ACCOUNTS on job sites (not existing logins)
+→ If both "Sign In" and "Create Account" are visible, prefer "Create Account"
+→ Only try login if no signup option exists`;
   } else if (hasEmail && !hasPassword) {
     credentialsStatus = `⚠ User has email (${profileContext["email"]}) but NO password saved
 → If password field exists, use REQUEST_VERIFICATION kind="PASSWORD"
@@ -1152,11 +1196,17 @@ export function buildVisionPrompt(
     credentialsStatus += `\n→ User PREFERS OAuth login (Continue with Google, etc.)`;
   }
 
-  // Determine what we're trying to accomplish
+  // Determine what we're trying to accomplish (auth-aware)
   const urlLower = observation.url.toLowerCase();
   let currentGoal = "Continue with the job application process";
-  if (urlLower.includes("login") || urlLower.includes("signin") || urlLower.includes("sign-in")) {
-    currentGoal = "Log in to the account to proceed with the application";
+  
+  // Auth state takes priority in goal determination
+  if (authState?.strategy === 'signup') {
+    currentGoal = "CREATE A NEW ACCOUNT to proceed with the application (login failed)";
+  } else if (authState?.strategy === 'oauth') {
+    currentGoal = "Use OAuth to sign in (login and signup both failed)";
+  } else if (urlLower.includes("login") || urlLower.includes("signin") || urlLower.includes("sign-in")) {
+    currentGoal = "Get past the authentication page - prefer creating a new account";
   } else if (urlLower.includes("signup") || urlLower.includes("register") || urlLower.includes("create")) {
     currentGoal = "Create an account to proceed with the application";
   } else if (urlLower.includes("apply") || urlLower.includes("application") || urlLower.includes("career")) {
@@ -1182,10 +1232,10 @@ ${loopContext.suggestedAlternatives.map(alt => `- [${alt.context}][${alt.index}]
 ` : ''}
 YOUR TASK:
 Look at the attached screenshot and find the NEXT BEST ACTION to continue the job application process.
-
+${authState?.strategy === 'signup' ? `\n🚨 IMPORTANT: Login has FAILED. You MUST look for a "Create Account", "Register", or "Sign Up" button.\nDo NOT try to fill the sign-in form again.\n` : ''}
 QUESTIONS TO ANSWER:
-1. What do you see on the page? (login form? application form? popup blocking?)
-2. Is there something blocking the way? (cookie banner, modal, overlay?)
+1. What do you see on the page? (login form? signup form? application form? popup blocking?)
+2. Is there a "Create Account" / "Register" / "Sign Up" option?
 3. What is the single best next action to move forward?
 4. Focus on CLICKABLE elements: buttons, links, form fields that need filling.
 
