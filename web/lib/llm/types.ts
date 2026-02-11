@@ -158,6 +158,43 @@ export interface CandidateElement {
   isEnabled?: boolean;
 }
 
+// Page understanding summary (LLM-derived)
+export type PageType =
+  | "job_listing"
+  | "application_form"
+  | "login"
+  | "signup"
+  | "review"
+  | "confirmation"
+  | "error"
+  | "unknown";
+
+export interface PageUnderstandingAction {
+  vaultyId?: string;
+  intent: string;
+  reason?: string;
+  label?: string;
+  text?: string;
+  role?: string;
+}
+
+export interface PageUnderstandingField {
+  vaultyId?: string;
+  label?: string;
+  required?: boolean;
+  missingProfileData?: boolean;
+}
+
+export interface PageUnderstanding {
+  pageType: PageType;
+  primaryGoal: string;
+  blockers: string[];
+  summary: string;
+  confidence: number;
+  requiredFields?: PageUnderstandingField[];
+  primaryActions?: PageUnderstandingAction[];
+}
+
 // Special elements detected on the page
 export interface SpecialElements {
   hasCaptcha?: boolean;
@@ -185,5 +222,6 @@ export interface PageObservation {
   // Candidate registry (executor v2)
   candidates?: CandidateElement[];
   registryVersion?: number;
+  understanding?: PageUnderstanding;
 }
 

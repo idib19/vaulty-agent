@@ -333,11 +333,12 @@ function createInitialApplicationState(startUrl, jobTitle, company) {
 }
 
 // Update application state based on observation and last action
-function updateApplicationState(state, observation, lastAction, lastResult) {
+function updateApplicationState(state, observation, lastAction, lastResult, pageUnderstanding) {
   if (!state) return state;
   
   const newState = JSON.parse(JSON.stringify(state)); // Deep clone
   const url = (observation?.url || "").toLowerCase();
+  const understanding = pageUnderstanding;
   
   // Track page visits
   if (observation?.url && !newState.memory.pagesVisited.includes(observation.url)) {
@@ -354,15 +355,36 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
     newState.progress.fieldsFilledThisPage = [];
   }
   
-  // Detect phase from URL and page content
-  if (url.includes('login') || url.includes('signin') || url.includes('sign-in') || url.includes('authenticate')) {
-    newState.progress.phase = 'logging_in';
-  } else if (url.includes('apply') || url.includes('application') || url.includes('career') || url.includes('jobs')) {
-    newState.progress.phase = 'filling_form';
-  } else if (url.includes('review') || url.includes('confirm') || url.includes('preview')) {
-    newState.progress.phase = 'reviewing';
-  } else if (url.includes('thank') || url.includes('success') || url.includes('submitted') || url.includes('complete')) {
-    newState.progress.phase = 'completed';
+  // Detect phase from page understanding if available
+  if (understanding?.pageType) {
+    switch (understanding.pageType) {
+      case "login":
+      case "signup":
+        newState.progress.phase = "logging_in";
+        break;
+      case "application_form":
+        newState.progress.phase = "filling_form";
+        break;
+      case "review":
+        newState.progress.phase = "reviewing";
+        break;
+      case "confirmation":
+        newState.progress.phase = "completed";
+        break;
+      default:
+        break;
+    }
+  } else {
+    // Detect phase from URL and page content
+    if (url.includes('login') || url.includes('signin') || url.includes('sign-in') || url.includes('authenticate')) {
+      newState.progress.phase = 'logging_in';
+    } else if (url.includes('apply') || url.includes('application') || url.includes('career') || url.includes('jobs')) {
+      newState.progress.phase = 'filling_form';
+    } else if (url.includes('review') || url.includes('confirm') || url.includes('preview')) {
+      newState.progress.phase = 'reviewing';
+    } else if (url.includes('thank') || url.includes('success') || url.includes('submitted') || url.includes('complete')) {
+      newState.progress.phase = 'completed';
+    }
   }
   
   // Track filled fields
@@ -402,8 +424,22 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
     }
   }
   
-  // Detect blockers from observation
-  if (observation?.specialElements?.hasCaptcha) {
+  // Detect blockers from page understanding first, then observation
+  const understandingBlockers = new Set(understanding?.blockers || []);
+  if (understandingBlockers.has("captcha")) {
+    newState.blockers.type = "captcha";
+    newState.blockers.description = "CAPTCHA detected on page";
+    newState.blockers.attemptsMade = (state.blockers?.type === "captcha" ? state.blockers.attemptsMade : 0) + 1;
+  } else if (understandingBlockers.has("otp") || understandingBlockers.has("verification")) {
+    newState.blockers.type = "verification";
+    newState.blockers.description = "Verification required";
+  } else if (understandingBlockers.has("file_upload")) {
+    newState.blockers.type = "file_upload";
+    newState.blockers.description = "File upload required";
+  } else if (understandingBlockers.has("error") || understandingBlockers.has("validation_errors")) {
+    newState.blockers.type = "error";
+    newState.blockers.description = "Validation errors detected";
+  } else if (observation?.specialElements?.hasCaptcha) {
     newState.blockers.type = 'captcha';
     newState.blockers.description = 'CAPTCHA detected on page';
     newState.blockers.attemptsMade = (state.blockers?.type === 'captcha' ? state.blockers.attemptsMade : 0) + 1;
@@ -425,6 +461,12 @@ function updateApplicationState(state, observation, lastAction, lastResult) {
   newState.progress.estimatedProgress = Math.min(100, phaseProgress + fieldsProgress);
   
   return newState;
+}
+
+function buildUnderstandingCacheKey(observation) {
+  const url = observation?.url || "";
+  const registryVersion = observation?.registryVersion ?? "0";
+  return `${url}::${registryVersion}`;
 }
 
 // Wait for user response to ASK_USER action
@@ -782,6 +824,8 @@ async function agentLoop({ jobId, startUrl, mode }) {
   // Track last action/result for state updates
   let lastAction = null;
   let lastResult = null;
+  let lastUnderstanding = existingJob.pageUnderstanding || null;
+  let lastUnderstandingCacheKey = existingJob.pageUnderstandingCacheKey || null;
   
   // Track previous URL for detecting page changes (redirects)
   let previousUrl = null;
@@ -846,9 +890,38 @@ async function agentLoop({ jobId, startUrl, mode }) {
     }
 
     // ============================================================
+    // PAGE UNDERSTANDING (LLM summary before state update)
+    // ============================================================
+    const apiBase = await getApiBase();
+    const understandingCacheKey = buildUnderstandingCacheKey(observation);
+    let pageUnderstanding = lastUnderstanding;
+    if (!lastUnderstandingCacheKey || understandingCacheKey !== lastUnderstandingCacheKey) {
+      try {
+        const understandingResponse = await postJSON(`${apiBase}/api/agent/understand`, {
+          jobId,
+          step,
+          mode,
+          observation,
+          profile,
+          applicationState
+        });
+        pageUnderstanding = understandingResponse?.understanding || null;
+        lastUnderstanding = pageUnderstanding;
+        lastUnderstandingCacheKey = understandingCacheKey;
+        await setJob(jobId, { pageUnderstanding, pageUnderstandingCacheKey: understandingCacheKey });
+      } catch (e) {
+        console.log("[agent] Page understanding call failed, continuing without summary", e);
+      }
+    }
+
+    if (pageUnderstanding) {
+      observation.understanding = pageUnderstanding;
+    }
+
+    // ============================================================
     // UPDATE APPLICATION STATE
     // ============================================================
-    applicationState = updateApplicationState(applicationState, observation, lastAction, lastResult);
+    applicationState = updateApplicationState(applicationState, observation, lastAction, lastResult, pageUnderstanding);
     await setJob(jobId, { applicationState });
     
     // ============================================================
@@ -1135,7 +1208,6 @@ async function agentLoop({ jobId, startUrl, mode }) {
     // MULTI-STEP PLAN EXECUTION (Phase 2)
     // Check if we have an existing plan with remaining steps
     // ============================================================
-    const apiBase = await getApiBase();
     let currentPlan = job.currentPlan;
     let plannerResponse;
     let usingExistingPlan = false;

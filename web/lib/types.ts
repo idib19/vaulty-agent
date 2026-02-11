@@ -1,5 +1,5 @@
 import type { UserProfile } from "./profile";
-import type { FormField, FormButton, CandidateElement } from "./llm/types";
+import type { FormField, FormButton, CandidateElement, PageUnderstanding } from "./llm/types";
 
 export type AgentMode = "live" | "background";
 
@@ -67,6 +67,7 @@ export type Observation = {
   specialElements?: SpecialElements;
   candidates?: CandidateElement[];
   registryVersion?: number;
+  understanding?: PageUnderstanding;
 };
 
 // Action history for context

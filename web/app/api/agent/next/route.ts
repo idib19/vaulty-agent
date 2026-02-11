@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
       specialElements: body.observation.specialElements,
       candidates: body.observation.candidates || [],
       registryVersion: body.observation.registryVersion,
+      understanding: body.observation.understanding,
     };
     
     // Use provided profile or empty

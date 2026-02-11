@@ -1,4 +1,4 @@
-import type { FormField, FormButton, PageObservation, AlternativeElement, LoopContext, CandidateElement } from "./types";
+import type { FormField, FormButton, PageObservation, AlternativeElement, LoopContext, CandidateElement, PageUnderstanding } from "./types";
 import type { UserProfile } from "../profile";
 import type { ApplicationState } from "../types";
 import { profileToContext } from "../profile";
@@ -147,6 +147,43 @@ function formatCandidateRegistry(candidates?: CandidateElement[]): string {
     if (c.isEnabled === false) parts.push("disabled");
     return parts.join(" ");
   }).join("\n");
+}
+
+function formatPageUnderstanding(understanding?: PageUnderstanding): string {
+  if (!understanding) return "(none)";
+  const blockers = (understanding.blockers || []).join(", ") || "none";
+  const primaryActions = understanding.primaryActions && understanding.primaryActions.length > 0
+    ? understanding.primaryActions.slice(0, 5).map(action => {
+      const parts: string[] = [];
+      if (action.vaultyId) parts.push(`vaultyId=${action.vaultyId}`);
+      if (action.intent) parts.push(`intent=${action.intent}`);
+      if (action.text) parts.push(`text="${action.text}"`);
+      if (action.label) parts.push(`label="${action.label}"`);
+      if (action.role) parts.push(`role=${action.role}`);
+      if (action.reason) parts.push(`reason="${action.reason}"`);
+      return `- ${parts.join(" ")}`;
+    }).join("\n")
+    : "(none)";
+  const requiredFields = understanding.requiredFields && understanding.requiredFields.length > 0
+    ? understanding.requiredFields.slice(0, 10).map(field => {
+      const parts: string[] = [];
+      if (field.vaultyId) parts.push(`vaultyId=${field.vaultyId}`);
+      if (field.label) parts.push(`label="${field.label}"`);
+      if (field.required) parts.push("required");
+      if (field.missingProfileData) parts.push("missing_profile_data");
+      return `- ${parts.join(" ")}`;
+    }).join("\n")
+    : "(none)";
+
+  return [
+    `pageType=${understanding.pageType}`,
+    `primaryGoal=${understanding.primaryGoal}`,
+    `blockers=${blockers}`,
+    `confidence=${understanding.confidence}`,
+    `summary="${understanding.summary}"`,
+    `primaryActions:\n${primaryActions}`,
+    `requiredFields:\n${requiredFields}`,
+  ].join("\n");
 }
 
 // ============================================================
@@ -478,6 +515,10 @@ export function buildUserPrompt(
 
   // Candidate registry (executor v2)
   const candidatesText = formatCandidateRegistry(observation.candidates);
+  const understandingText = formatPageUnderstanding(observation.understanding);
+  const understandingText = formatPageUnderstanding(observation.understanding);
+  const understandingText = formatPageUnderstanding(observation.understanding);
+  const understandingText = formatPageUnderstanding(observation.understanding);
   
   // Modal status (important for context priority)
   const modalStatus = observation.hasActiveModal 
@@ -619,6 +660,9 @@ ${buttonsText || "(No buttons found)"}${specialElementsText}${historyText}
 
 CANDIDATE REGISTRY (use vaultyId for targeting):
 ${candidatesText}
+
+PAGE UNDERSTANDING (LLM summary, verify against observation):
+${understandingText}
 
 PAGE CONTEXT (truncated):
 ${observation.pageContext.slice(0, 2000)}
@@ -917,6 +961,9 @@ ${buttonsText || "(No buttons found)"}
 CANDIDATE REGISTRY (use vaultyId for targeting):
 ${candidatesText}
 
+PAGE UNDERSTANDING (LLM summary, verify against observation):
+${understandingText}
+
 PAGE CONTEXT (truncated):
 ${(observation.pageContext || "").slice(0, 1500)}
 
@@ -1110,6 +1157,9 @@ DOM SUMMARY (may be incomplete vs screenshot):
 CANDIDATE REGISTRY (use vaultyId for targeting when possible):
 ${candidatesText}
 
+PAGE UNDERSTANDING (LLM summary, verify against observation):
+${understandingText}
+
 PAGE CONTEXT (truncated):
 ${(observation.pageContext || "").slice(0, 1200)}
 `;
@@ -1196,7 +1246,138 @@ Fields: ${observation.fields?.slice(0, 6).map(f => `[${f.index}] ${f.type}`).joi
 CANDIDATE REGISTRY (use vaultyId for targeting when possible):
 ${candidatesText}
 
+PAGE UNDERSTANDING (LLM summary, verify against observation):
+${understandingText}
+
 IMPORTANT: Return the SPECIFIC action to execute next. Prefer vaultyId; use intent/text only if no vaultyId is available.`;
+}
+
+// ============================================================
+// PAGE UNDERSTANDING PROMPT (pre-planning)
+// ============================================================
+
+export const UNDERSTANDING_SYSTEM_PROMPT = `You are a PAGE UNDERSTANDING agent for a job application assistant.
+
+Your job is to interpret the page, NOT to plan or choose actions.
+You MUST return a JSON object that summarizes the page and key blockers.
+
+RESPONSE FORMAT (JSON only):
+{
+  "pageType": "job_listing | application_form | login | signup | review | confirmation | error | unknown",
+  "primaryGoal": "<short goal, e.g. fill_form, login, choose_job, submit, wait>",
+  "blockers": ["cookie_banner", "captcha", "otp", "file_upload", "modal_blocking", "validation_errors", "unknown"],
+  "summary": "<1-2 sentence plain summary of the page>",
+  "confidence": 0.0-1.0,
+  "requiredFields": [
+    { "vaultyId": "<id>", "label": "<label>", "required": true, "missingProfileData": false }
+  ],
+  "primaryActions": [
+    { "vaultyId": "<id>", "intent": "submit_application", "reason": "main CTA" }
+  ]
+}
+
+RULES:
+- Use vaultyId whenever possible (from the candidate registry).
+- Do NOT return actions or plans.
+- If unsure, use pageType "unknown" and explain in summary.
+- Keep blockers conservative; only include blockers you have evidence for.
+`;
+
+export function buildUnderstandingPrompt(
+  observation: PageObservation,
+  profile: UserProfile,
+  step: number,
+  applicationState?: ApplicationState
+): string {
+  const profileContext = profileToContext(profile);
+  const goalContext = buildGoalContext(applicationState);
+  const candidatesText = formatCandidateRegistry(observation.candidates);
+  const understandingText = formatPageUnderstanding(observation.understanding);
+
+  const fieldsText = observation.fields
+    .map(f => {
+      const label = f.label || f.name || f.id || `field_${f.index}`;
+      const required = f.required ? "required" : "optional";
+      const value = f.value ? `"${f.value.slice(0, 50)}"` : "(empty)";
+      return `- ${label} (${required}) value=${value}`;
+    })
+    .join("\n");
+
+  const buttonsText = observation.buttons
+    .map(b => `- ${b.text} [${b.context || "PAGE"}]`)
+    .join("\n");
+
+  const profileSummary = Object.entries(profileContext)
+    .map(([key, value]) => `${key}: ${value.length > 200 ? value.slice(0, 200) + "..." : value}`)
+    .join("\n");
+
+  return `${goalContext}
+PAGE UNDERSTANDING REQUEST
+==========================
+STEP: ${step}
+PAGE: ${observation.url}
+TITLE: ${observation.title}
+
+PROFILE (for missing data detection):
+${profileSummary || "(No profile data provided)"}
+
+FIELDS:
+${fieldsText || "(No fields found)"}
+
+BUTTONS:
+${buttonsText || "(No buttons found)"}
+
+SPECIAL ELEMENTS:
+${observation.specialElements ? JSON.stringify(observation.specialElements) : "(none)"}
+
+CANDIDATE REGISTRY (use vaultyId for references):
+${candidatesText}
+
+PREVIOUS UNDERSTANDING (if any):
+${understandingText}
+
+PAGE CONTEXT (truncated):
+${(observation.pageContext || "").slice(0, 1500)}
+`;
+}
+
+export function parseUnderstandingResponse(response: string): PageUnderstanding {
+  let jsonStr = response.trim();
+  if (jsonStr.startsWith("```")) {
+    const lines = jsonStr.split("\n");
+    lines.shift();
+    if (lines[lines.length - 1] === "```") {
+      lines.pop();
+    }
+    jsonStr = lines.join("\n");
+  }
+  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[0];
+  }
+  try {
+    const parsed = JSON.parse(jsonStr);
+    return {
+      pageType: parsed.pageType || "unknown",
+      primaryGoal: parsed.primaryGoal || "unknown",
+      blockers: Array.isArray(parsed.blockers) ? parsed.blockers : [],
+      summary: String(parsed.summary || ""),
+      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.5,
+      requiredFields: Array.isArray(parsed.requiredFields) ? parsed.requiredFields : [],
+      primaryActions: Array.isArray(parsed.primaryActions) ? parsed.primaryActions : [],
+    };
+  } catch (e) {
+    console.error("[LLM] Failed to parse understanding response:", response);
+    return {
+      pageType: "unknown",
+      primaryGoal: "unknown",
+      blockers: [],
+      summary: "Unable to parse understanding response.",
+      confidence: 0.1,
+      requiredFields: [],
+      primaryActions: [],
+    };
+  }
 }
 
 export function parseActionResponse(response: string): EnhancedLLMResponse {
