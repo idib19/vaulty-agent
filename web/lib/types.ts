@@ -67,6 +67,9 @@ export type Observation = {
   specialElements?: SpecialElements;
   candidates?: CandidateElement[];
   registryVersion?: number;
+  // Modal awareness
+  hasActiveModal?: boolean;
+  modalTitle?: string | null;
 };
 
 // Action history for context

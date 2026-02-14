@@ -1,6 +1,6 @@
 import type { FormField, FormButton, PageObservation, AlternativeElement, LoopContext, CandidateElement } from "./types";
 import type { UserProfile } from "../profile";
-import type { ApplicationState } from "../types";
+import type { ApplicationState, ApplicationGoal } from "../types";
 import { profileToContext } from "../profile";
 
 // Types for enhanced response format
@@ -147,6 +147,94 @@ function formatCandidateRegistry(candidates?: CandidateElement[]): string {
     if (c.isEnabled === false) parts.push("disabled");
     return parts.join(" ");
   }).join("\n");
+}
+
+// ============================================================
+// UNDERSTAND STEP - Goal-aware page analysis for planner
+// ============================================================
+
+export const UNDERSTAND_SYSTEM_PROMPT = `You are a page analyst for a form-filling agent. You receive structured observation data (fields, buttons, candidate registry, page context) and the current application goal.
+
+Your task: Produce a short, goal-aware understanding of the page that will be used by the next step (the planner) to output concise, efficient actions—exactly one fill or one click per step.
+
+Output 2–4 short paragraphs. Include:
+1. What this page is and what the user is expected to do to advance toward the goal (e.g. "To apply to [Job] at [Company], this page shows...").
+2. Key elements and suggested order: which fields to fill first, which button to click next. Point to specific labels or vaultyIds when helpful so the planner can target precisely.
+3. Any ambiguities or warnings: multiple similar buttons, modal vs main page, required fields missing data, validation errors, captcha/OTP.
+
+The planner will use your understanding to choose a single action (fill this field / click this button). Be specific so the planner outputs minimal, precise targets—not vague or redundant actions.`;
+
+export function buildUnderstandPrompt(
+  observation: PageObservation,
+  goal?: ApplicationGoal | null
+): string {
+  const lines: string[] = [];
+
+  if (goal) {
+    lines.push(
+      `CURRENT GOAL: Apply to "${goal.jobTitle}" at "${goal.company}". URL: ${goal.jobUrl}.`
+    );
+    lines.push("");
+  }
+
+  lines.push(`PAGE: ${observation.url}`);
+  lines.push(`TITLE: ${observation.title}`);
+  lines.push("");
+
+  if (observation.hasActiveModal) {
+    lines.push(`ACTIVE MODAL: "${observation.modalTitle || "Dialog"}" — focus on modal content.`);
+    lines.push("");
+  }
+
+  lines.push("FIELDS (index, label, type, required, value, context):");
+  const fieldsText = (observation.fields || [])
+    .filter((f) => !f.disabled && !f.readonly)
+    .map((f) => {
+      const label = f.label || f.name || f.id || `field_${f.index}`;
+      const val = f.value ? f.value.slice(0, 40) + (f.value.length > 40 ? "..." : "") : "(empty)";
+      const req = f.required ? " required" : "";
+      const ctx = f.context || "PAGE";
+      const err = f.hasError ? " HAS_ERROR" : "";
+      return `  [${f.index}] ${label} type=${f.type}${req} value="${val}" [${ctx}]${err}`;
+    })
+    .join("\n");
+  lines.push(fieldsText || "  (none)");
+  lines.push("");
+
+  lines.push("BUTTONS (index, text, context):");
+  const buttonsText = (observation.buttons || [])
+    .filter((b) => !b.disabled)
+    .map((b) => `  [${b.index}] "${b.text}" [${b.context || "PAGE"}]`)
+    .join("\n");
+  lines.push(buttonsText || "  (none)");
+  lines.push("");
+
+  lines.push("CANDIDATE REGISTRY (vaultyId, type, text/label for targeting):");
+  lines.push(formatCandidateRegistry(observation.candidates));
+  lines.push("");
+
+  const pageContext = (observation.pageContext || "").slice(0, 1500);
+  if (pageContext) {
+    lines.push("PAGE CONTEXT (visible text, first 1500 chars):");
+    lines.push(pageContext);
+    lines.push("");
+  }
+
+  if (observation.specialElements) {
+    const se = observation.specialElements;
+    const parts: string[] = [];
+    if (se.hasCaptcha) parts.push(`CAPTCHA (${se.captchaType || "unknown"})`);
+    if (se.hasOAuthButtons?.length) parts.push(`OAuth: ${se.hasOAuthButtons.join(", ")}`);
+    if (se.hasFileUpload) parts.push("File upload");
+    if (se.hasPasswordField) parts.push("Password field");
+    const otp = (se as { hasOtpField?: boolean }).hasOtpField;
+    if (otp) parts.push("OTP/verification fields");
+    if (parts.length > 0) {
+      lines.push("SPECIAL ELEMENTS: " + parts.join("; "));
+    }
+  }
+
+  return lines.join("\n");
 }
 
 // ============================================================
@@ -449,7 +537,8 @@ export function buildUserPrompt(
   profile: UserProfile,
   step: number,
   actionHistory?: ActionHistory[],
-  applicationState?: ApplicationState
+  applicationState?: ApplicationState,
+  pageUnderstanding?: string | null
 ): string {
   const profileContext = profileToContext(profile);
   const goalContext = buildGoalContext(applicationState);
@@ -632,7 +721,7 @@ ${errorLines}
     }
   }
   
-  return `${goalContext}
+  const body = `${goalContext}
 STEP: ${step}
 PAGE: ${observation.url}
 TITLE: ${observation.title}
@@ -656,6 +745,10 @@ ${observation.pageContext.slice(0, 2000)}
 Remember: Respond with JSON containing "thinking", "confidence", and "action" fields.
 Stay focused on your mission: Apply to "${applicationState?.goal?.jobTitle || 'the job'}" at "${applicationState?.goal?.company || 'the company'}".
 What is the next action to take?`;
+  if (pageUnderstanding?.trim()) {
+    return `PAGE UNDERSTANDING:\n${pageUnderstanding.trim()}\n\n---\n\n${body}`;
+  }
+  return body;
 }
 
 // ============================================================
@@ -776,7 +869,8 @@ export function buildPlanningPrompt(
   observation: PageObservation,
   profile: UserProfile,
   step: number,
-  applicationState?: ApplicationState
+  applicationState?: ApplicationState,
+  pageUnderstanding?: string | null
 ): string {
   const profileContext = profileToContext(profile);
   const goalContext = buildGoalContext(applicationState);
@@ -928,7 +1022,7 @@ ${missingRequiredWarning}
     }
   }
 
-  return `${goalContext}
+  const body = `${goalContext}
 MULTI-STEP PLANNING REQUEST
 ===========================
 STEP: ${step}
@@ -959,6 +1053,10 @@ INSTRUCTIONS:
    - If YES: End your plan with ASK_USER to request the missing data (DO NOT submit!)
    - If NO: End with clicking the appropriate navigation button (Next/Continue/Submit)
 6. Return JSON with "thinking", "confidence", "plan", and "currentStepIndex"`;
+  if (pageUnderstanding?.trim()) {
+    return `PAGE UNDERSTANDING:\n${pageUnderstanding.trim()}\n\n---\n\n${body}`;
+  }
+  return body;
 }
 
 // Vision-specific system prompt when screenshot is provided
@@ -1091,7 +1189,8 @@ export function buildInitialVisionPrompt(
   observation: PageObservation,
   profile: UserProfile,
   step: number,
-  applicationState?: ApplicationState
+  applicationState?: ApplicationState,
+  pageUnderstanding?: string | null
 ): string {
   const profileContext = profileToContext(profile);
   const goal = applicationState?.goal;
@@ -1111,7 +1210,7 @@ export function buildInitialVisionPrompt(
     ? "This is STEP 2 - you may have been redirected to the company's ATS (Lever, Greenhouse, Workday). Look for another Apply button/link to open the actual form."
     : `This is STEP ${step} - you should be in the application form now.`;
 
-  return `INITIAL VISION BOOTSTRAP (Step ${step}/2)
+  const body = `INITIAL VISION BOOTSTRAP (Step ${step}/2)
 ==========================================
 
 ${goalLine}
@@ -1145,6 +1244,10 @@ ${candidatesText}
 PAGE CONTEXT (truncated):
 ${(observation.pageContext || "").slice(0, 1200)}
 `;
+  if (pageUnderstanding?.trim()) {
+    return `PAGE UNDERSTANDING:\n${pageUnderstanding.trim()}\n\n---\n\n${body}`;
+  }
+  return body;
 }
 
 // Build vision-enhanced user prompt
@@ -1153,7 +1256,8 @@ export function buildVisionPrompt(
   profile: UserProfile,
   step: number,
   loopContext?: LoopContext,
-  applicationState?: ApplicationState
+  applicationState?: ApplicationState,
+  pageUnderstanding?: string | null
 ): string {
   const profileContext = profileToContext(profile);
   const failedAction = loopContext?.failedAction;
@@ -1213,7 +1317,7 @@ export function buildVisionPrompt(
     currentGoal = "Fill out the job application form";
   }
 
-  return `SCREENSHOT ANALYSIS REQUEST
+  const body = `SCREENSHOT ANALYSIS REQUEST
 ==========================
 
 CURRENT GOAL: ${currentGoal}
@@ -1247,6 +1351,10 @@ CANDIDATE REGISTRY (use vaultyId for targeting when possible):
 ${candidatesText}
 
 IMPORTANT: Return the SPECIFIC action to execute next. Prefer vaultyId; use intent/text only if no vaultyId is available.`;
+  if (pageUnderstanding?.trim()) {
+    return `PAGE UNDERSTANDING:\n${pageUnderstanding.trim()}\n\n---\n\n${body}`;
+  }
+  return body;
 }
 
 export function parseActionResponse(response: string): EnhancedLLMResponse {

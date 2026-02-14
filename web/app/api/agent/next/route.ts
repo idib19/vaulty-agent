@@ -8,10 +8,12 @@ import {
   VISION_SYSTEM_PROMPT, 
   INITIAL_VISION_SYSTEM_PROMPT, 
   PLANNING_SYSTEM_PROMPT,
+  UNDERSTAND_SYSTEM_PROMPT,
   buildUserPrompt, 
   buildVisionPrompt, 
   buildInitialVisionPrompt, 
   buildPlanningPrompt,
+  buildUnderstandPrompt,
   parseActionResponse, 
   parsePlanningResponse,
   ActionHistory 
@@ -62,10 +64,36 @@ export async function POST(request: NextRequest) {
       specialElements: body.observation.specialElements,
       candidates: body.observation.candidates || [],
       registryVersion: body.observation.registryVersion,
+      hasActiveModal: body.observation.hasActiveModal,
+      modalTitle: body.observation.modalTitle,
     };
     
     // Use provided profile or empty
     const profile = body.profile || emptyProfile;
+    
+    // Understand step: goal-aware page analysis before planning (when LLM is configured)
+    let pageUnderstanding: string | null = null;
+    try {
+      const understandStart = Date.now();
+      const understandPrompt = buildUnderstandPrompt(observation, body.applicationState?.goal ?? null);
+      const understandResponse = await callLLM({
+        messages: [
+          { role: "system", content: UNDERSTAND_SYSTEM_PROMPT },
+          { role: "user", content: understandPrompt },
+        ],
+        temperature: 0.2,
+        maxTokens: 512,
+      });
+      pageUnderstanding = understandResponse.content?.trim() || null;
+      const understandDuration = Date.now() - understandStart;
+      if (pageUnderstanding) {
+        console.log(`[Planner] 📖 Page understanding computed in ${understandDuration}ms (${pageUnderstanding.length} chars)`);
+      } else {
+        console.log(`[Planner] 📖 Understand step returned empty in ${understandDuration}ms`);
+      }
+    } catch (understandErr) {
+      console.warn("[Planner] Understand step failed, continuing without:", understandErr);
+    }
     
     // Convert action history to the format expected by buildUserPrompt
     const actionHistory: ActionHistory[] | undefined = body.actionHistory?.map(h => ({
@@ -111,7 +139,7 @@ export async function POST(request: NextRequest) {
       console.log(`[Planner] 📋 Vision-enhanced: ${useVisionForPlan ? "YES" : "NO (text-only)"}`);
       
       // Build planning prompt with conversation history
-      let planningPrompt = buildPlanningPrompt(observation, profile, body.step, applicationState);
+      let planningPrompt = buildPlanningPrompt(observation, profile, body.step, applicationState, pageUnderstanding);
       
       // Add conversation history context for learning from past actions
       if (body.actionHistory && body.actionHistory.length > 0) {
@@ -242,7 +270,7 @@ export async function POST(request: NextRequest) {
 
       if (isInitialVision) {
         systemPrompt = INITIAL_VISION_SYSTEM_PROMPT;
-        visionPrompt = buildInitialVisionPrompt(observation, profile, body.step, applicationState);
+        visionPrompt = buildInitialVisionPrompt(observation, profile, body.step, applicationState, pageUnderstanding);
       } else {
       console.log(`[Planner] 🔄 Loop context:`, {
         failedActionType: body.loopContext?.failedAction?.type,
@@ -250,7 +278,7 @@ export async function POST(request: NextRequest) {
         failCount: body.loopContext?.failCount,
         error: body.loopContext?.error
       });
-        visionPrompt = buildVisionPrompt(observation, profile, body.step, body.loopContext, applicationState);
+        visionPrompt = buildVisionPrompt(observation, profile, body.step, body.loopContext, applicationState, pageUnderstanding);
       }
       
       console.log(`[Planner] 📝 Vision prompt length: ${visionPrompt.length} chars`);
@@ -282,7 +310,7 @@ export async function POST(request: NextRequest) {
       }
       
       // Build prompt with action history AND application state
-      const userPrompt = buildUserPrompt(observation, profile, body.step, actionHistory, applicationState);
+      const userPrompt = buildUserPrompt(observation, profile, body.step, actionHistory, applicationState, pageUnderstanding);
       
       // Build conversation history context if we have rich history
       let conversationContext = "";

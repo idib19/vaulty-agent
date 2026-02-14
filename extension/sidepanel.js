@@ -4,6 +4,9 @@ const SETTINGS_KEY = "agentSettings";
 const LOGS_KEY = "agentLogs";
 const DEFAULT_MAX_STEPS = 40;
 
+/** Current copilot result data; used by "Check answers" to grade quiz-mode suggestions */
+let lastCopilotData = null;
+
 chrome.runtime.sendMessage({ type: "SIDE_PANEL_OPENED" });
 window.addEventListener("beforeunload", () => {
   chrome.runtime.sendMessage({ type: "SIDE_PANEL_CLOSED" });
@@ -322,6 +325,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
       return;
     }
     result.className = "copilot-result";
+    lastCopilotData = data;
     let html = "";
     if (data?.title) html += `<h3>${escapeHtml(data.title)}</h3>`;
     if (data?.content) html += `<p>${escapeHtml(data.content)}</p>`;
@@ -332,7 +336,108 @@ chrome.storage.onChanged.addListener((changes, area) => {
       });
       html += "</ul>";
     }
+    let hasQuizMode = false;
+    if (data?.suggestions?.length) {
+      html += '<div class="copilot-suggestions"><h4>Suggested answers</h4>';
+      data.suggestions.forEach((s, i) => {
+        const isQuiz = s.options && s.options.length > 1 && typeof s.correctIndex === "number" && s.correctIndex >= 0 && s.correctIndex < s.options.length;
+        if (isQuiz) hasQuizMode = true;
+        html += isQuiz
+          ? '<div class="copilot-suggestion-item copilot-quiz-item" data-suggestion-index="' + i + '">'
+          : '<div class="copilot-suggestion-item">';
+        html += `<div class="copilot-suggestion-q">${escapeHtml(s.question)}</div>`;
+        if (isQuiz) {
+          s.options.forEach((opt, j) => {
+            html += '<label class="copilot-quiz-option"><input type="radio" name="copilot-q-' + i + '" value="' + j + '"> <span>' + escapeHtml(opt) + '</span></label>';
+          });
+        } else {
+          html += `<div class="copilot-suggestion-a">${escapeHtml(s.suggestedAnswer)}</div>`;
+          if (s.rationale) html += `<div class="copilot-suggestion-rationale">${escapeHtml(s.rationale)}</div>`;
+        }
+        html += "</div>";
+      });
+      if (hasQuizMode) html += '<button type="button" class="btn copilot-check-answers">Check answers</button>';
+      html += "</div>";
+    }
     result.innerHTML = html || "No content returned.";
+  }
+});
+
+document.getElementById("copilotResult")?.addEventListener("click", (e) => {
+  if (!e.target.classList.contains("copilot-check-answers")) return;
+  const data = lastCopilotData;
+  const result = document.getElementById("copilotResult");
+  if (!data?.suggestions?.length || !result) return;
+  const btn = e.target;
+  btn.disabled = true;
+  data.suggestions.forEach((s, i) => {
+    const isQuiz = s.options && s.options.length > 1 && typeof s.correctIndex === "number" && s.correctIndex >= 0 && s.correctIndex < s.options.length;
+    if (!isQuiz) return;
+    const wrapper = result.querySelector('.copilot-quiz-item[data-suggestion-index="' + i + '"]');
+    if (!wrapper) return;
+    const selected = wrapper.querySelector('input[name="copilot-q-' + i + '"]:checked');
+    const selectedIndex = selected ? parseInt(selected.value, 10) : -1;
+    const correct = selectedIndex === s.correctIndex;
+    const correctText = s.options[s.correctIndex];
+    let feedback = '<div class="copilot-quiz-feedback copilot-quiz-feedback--' + (correct ? 'correct' : 'incorrect') + '">';
+    feedback += correct ? '<span class="copilot-quiz-result">Correct</span>' : '<span class="copilot-quiz-result">Incorrect</span>';
+    feedback += '<div class="copilot-quiz-correct-answer">Correct answer: ' + escapeHtml(correctText) + '</div>';
+    if (s.rationale) feedback += '<div class="copilot-suggestion-rationale">' + escapeHtml(s.rationale) + '</div>';
+    if (!correct) feedback += '<button type="button" class="btn copilot-explain-incorrect" data-suggestion-index="' + i + '">Get deeper explanation</button>';
+    feedback += '</div>';
+    wrapper.insertAdjacentHTML("beforeend", feedback);
+    wrapper.querySelectorAll('input[type="radio"]').forEach((radio) => { radio.disabled = true; });
+  });
+});
+
+document.getElementById("copilotResult")?.addEventListener("click", async (e) => {
+  if (!e.target.classList.contains("copilot-explain-incorrect")) return;
+  const btn = e.target;
+  const suggestionIndex = parseInt(btn.getAttribute("data-suggestion-index"), 10);
+  if (Number.isNaN(suggestionIndex)) return;
+  const data = lastCopilotData;
+  const result = document.getElementById("copilotResult");
+  if (!data?.suggestions?.[suggestionIndex] || !result) return;
+  const s = data.suggestions[suggestionIndex];
+  const wrapper = result.querySelector('.copilot-quiz-item[data-suggestion-index="' + suggestionIndex + '"]');
+  if (!wrapper) return;
+  const selected = wrapper.querySelector('input[name="copilot-q-' + suggestionIndex + '"]:checked');
+  const selectedValue = selected ? parseInt(selected.value, 10) : -1;
+  const userAnswer = selectedValue >= 0 && s.options?.[selectedValue] != null ? s.options[selectedValue] : "";
+  const correctAnswer = s.options?.[s.correctIndex] ?? s.suggestedAnswer ?? "";
+  const question = s.question ?? "";
+  btn.disabled = true;
+  btn.textContent = "Loading...";
+  try {
+    const apiBase = await getApiBase();
+    const res = await fetch(`${apiBase}/api/copilot/interpret`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task: "explain_incorrect",
+        question,
+        userAnswer,
+        correctAnswer,
+        rationale: s.rationale || undefined,
+        context: data.title || data.content ? { title: data.title, summary: data.content } : undefined,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error || `Request failed: ${res.status}`);
+    }
+    const explanation = typeof json.explanation === "string" ? json.explanation : "No explanation returned.";
+    const div = document.createElement("div");
+    div.className = "copilot-deeper-explanation";
+    div.textContent = explanation;
+    btn.replaceWith(div);
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Get deeper explanation";
+    const errEl = document.createElement("div");
+    errEl.className = "copilot-explain-error";
+    errEl.textContent = err instanceof Error ? err.message : "Failed to load explanation.";
+    btn.after(errEl);
   }
 });
 
