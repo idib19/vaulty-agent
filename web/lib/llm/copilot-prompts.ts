@@ -8,6 +8,8 @@ export interface CopilotPageContext {
   title: string;
   selectedText?: string;
   pageText?: string;
+  /** Optional user hint to guide email draft (e.g. "reply to this job", "follow up on application") */
+  emailHint?: string;
 }
 
 export const COPILOT_SUMMARIZE_SYSTEM = `You are Vaulty Copilot, a helpful web browsing assistant.
@@ -39,6 +41,12 @@ Respond in JSON:
 
 Use the first format (suggestedAnswer only) for free-form or single-answer questions. Use the second format (with options and correctIndex) for multiple-choice questions so the user can run a practice quiz. If there are no clear questions on the page, omit "suggestions" or set it to [].
 
+5. If the page looks like an email-compose context (Gmail compose, reply form, job posting, cold outreach, contact form, etc.), include an optional "emailDraft" object. Use "emailHint" from the prompt when provided to guide the draft (e.g. "reply to this job" → draft a job application reply). Omit "emailDraft" when the page is not email-related.
+   - "subject": draft subject line
+   - "body": draft email body (plain text, 2-5 short paragraphs)
+   - "recipientHint": (optional) suggested recipient or context
+   - "contextNote": (optional) brief note about the draft purpose
+
 Rules:
 - Be concise and informative
 - Focus on the main content, ignore navigation, ads, footers
@@ -52,11 +60,12 @@ export function buildCopilotSummarizePrompt(context: CopilotPageContext): string
   return `Page URL: ${context.url}
 Page Title: ${context.title}
 ${context.selectedText ? `\nSelected Text: ${context.selectedText}` : ""}
+${context.emailHint ? `\nEmail context hint (user-provided): ${context.emailHint}` : ""}
 
 Page Content (truncated):
 ${context.pageText?.slice(0, 4000) || "(no text extracted)"}
 
-Summarize this page.`;
+Summarize this page.${context.emailHint ? " If appropriate, also provide an email draft based on the page content and the user's hint." : ""}`;
 }
 
 export const COPILOT_EXPLAIN_INCORRECT_SYSTEM = `You are Vaulty Copilot, a study-help assistant. The user got a quiz question wrong and wants a deeper explanation.

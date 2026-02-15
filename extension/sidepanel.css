@@ -483,6 +483,13 @@ hr {
 .copilot-quiz-feedback .copilot-explain-incorrect { margin-top: 10px; }
 .copilot-deeper-explanation { margin-top: 10px; padding: 10px; font-size: 13px; line-height: 1.5; color: #e4e4e7; background: rgba(0, 0, 0, 0.2); border-radius: 6px; border-left: 3px solid #6366f1; }
 .copilot-explain-error { margin-top: 8px; font-size: 12px; color: #f87171; }
+.copilot-email-draft { margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.copilot-email-draft h4 { margin: 0 0 10px; font-size: 14px; color: #a5b4fc; }
+.copilot-email-subject { margin-bottom: 8px; font-size: 13px; color: #e4e4e7; }
+.copilot-email-body { padding: 10px; background: rgba(0, 0, 0, 0.2); border-radius: 6px; font-size: 13px; line-height: 1.5; color: #d4d4d8; white-space: pre-wrap; margin-bottom: 10px; }
+.copilot-email-recipient, .copilot-email-context { font-size: 12px; color: #71717a; margin-bottom: 6px; }
+.copilot-email-actions { display: flex; gap: 8px; margin-top: 8px; }
+.copilot-copy-btn { font-size: 12px; padding: 6px 12px; }
 .copilot-result.error {
   background: rgba(239, 68, 68, 0.1);
   border-color: rgba(239, 68, 68, 0.3);

@@ -36,12 +36,20 @@ export interface CopilotSuggestion {
   correctIndex?: number;
 }
 
+interface CopilotEmailDraft {
+  subject: string;
+  body: string;
+  recipientHint?: string;
+  contextNote?: string;
+}
+
 interface CopilotSummaryResponse {
   type: "summary";
   title: string;
   content: string;
   keyPoints?: string[];
   suggestions?: CopilotSuggestion[];
+  emailDraft?: CopilotEmailDraft;
 }
 
 function parseSummaryResponse(content: string): CopilotSummaryResponse {
@@ -108,12 +116,28 @@ function parseSummaryResponse(content: string): CopilotSummaryResponse {
       if (suggestions.length === 0) suggestions = undefined;
     }
 
+    let emailDraft: CopilotEmailDraft | undefined;
+    const rawEmailDraft = parsed.emailDraft as Record<string, unknown> | null | undefined;
+    if (rawEmailDraft !== null && typeof rawEmailDraft === "object") {
+      const subj = rawEmailDraft.subject;
+      const b = rawEmailDraft.body;
+      if (typeof subj === "string" && typeof b === "string") {
+        emailDraft = {
+          subject: subj,
+          body: b,
+          recipientHint: typeof rawEmailDraft.recipientHint === "string" ? rawEmailDraft.recipientHint : undefined,
+          contextNote: typeof rawEmailDraft.contextNote === "string" ? rawEmailDraft.contextNote : undefined,
+        };
+      }
+    }
+
     return {
       type: "summary",
       title,
       content: summary,
       keyPoints: keyPoints?.length ? keyPoints : undefined,
       suggestions,
+      emailDraft,
     };
   } catch {
     return {
@@ -122,6 +146,7 @@ function parseSummaryResponse(content: string): CopilotSummaryResponse {
       content,
       keyPoints: undefined,
       suggestions: undefined,
+      emailDraft: undefined,
     };
   }
 }

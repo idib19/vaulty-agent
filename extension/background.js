@@ -886,7 +886,7 @@ async function captureScreenshot(tabId) {
   }
 }
 
-async function copilotSummarize(tabId) {
+async function copilotSummarize(tabId, emailHint) {
   const apiBase = await getApiBase();
   let context = { url: "", title: "", selectedText: "", pageText: "" };
   try {
@@ -909,6 +909,7 @@ async function copilotSummarize(tabId) {
         title: context.title,
         selectedText: context.selectedText || undefined,
         pageText: context.pageText || undefined,
+        emailHint: emailHint || undefined,
       },
     }),
   });
@@ -2330,7 +2331,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: "No tabId" });
           return;
         }
-        copilotSummarize(tabId)
+        copilotSummarize(tabId, msg.emailHint)
           .then((result) => {
             chrome.storage.session.set({ copilotResult: result });
             sendResponse({ ok: true });

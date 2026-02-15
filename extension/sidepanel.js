@@ -295,7 +295,8 @@ document.getElementById("copilotSummarize")?.addEventListener("click", async () 
       pageInfo.classList.remove("hidden");
       pageInfo.textContent = `Summarizing: ${tab.title || tab.url}`;
     }
-    chrome.runtime.sendMessage({ type: "COPILOT_SUMMARIZE", tabId: tab.id });
+    const hint = document.getElementById("copilotEmailHint")?.value?.trim();
+    chrome.runtime.sendMessage({ type: "COPILOT_SUMMARIZE", tabId: tab.id, emailHint: hint || undefined });
   } catch (e) {
     if (loading) loading.classList.add("hidden");
     btn.disabled = false;
@@ -336,6 +337,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
       });
       html += "</ul>";
     }
+    if (data?.emailDraft?.subject && data?.emailDraft?.body) {
+      const ed = data.emailDraft;
+      html += '<div class="copilot-email-draft"><h4>Email draft</h4>';
+      html += '<div class="copilot-email-subject"><strong>Subject:</strong> ' + escapeHtml(ed.subject) + '</div>';
+      html += '<div class="copilot-email-body">' + escapeHtml(ed.body).replace(/\n/g, "<br>") + '</div>';
+      if (ed.recipientHint) html += '<div class="copilot-email-recipient">' + escapeHtml(ed.recipientHint) + '</div>';
+      if (ed.contextNote) html += '<div class="copilot-email-context">' + escapeHtml(ed.contextNote) + '</div>';
+      html += '<div class="copilot-email-actions">';
+      html += '<button type="button" class="btn copilot-copy-btn" data-copy="subject">Copy subject</button>';
+      html += '<button type="button" class="btn copilot-copy-btn" data-copy="body">Copy body</button>';
+      html += '</div></div>';
+    }
     let hasQuizMode = false;
     if (data?.suggestions?.length) {
       html += '<div class="copilot-suggestions"><h4>Suggested answers</h4>';
@@ -363,7 +376,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-document.getElementById("copilotResult")?.addEventListener("click", (e) => {
+document.getElementById("copilotResult")?.addEventListener("click", async (e) => {
+  if (e.target.classList.contains("copilot-copy-btn")) {
+    const btn = e.target;
+    const copyType = btn.getAttribute("data-copy");
+    const data = lastCopilotData;
+    if (!copyType || !data?.emailDraft) return;
+    const text = copyType === "subject" ? data.emailDraft.subject : data.emailDraft.body;
+    try {
+      await navigator.clipboard.writeText(text);
+      const origText = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = origText; }, 1500);
+    } catch {
+      btn.textContent = "Copy failed";
+    }
+    return;
+  }
   if (!e.target.classList.contains("copilot-check-answers")) return;
   const data = lastCopilotData;
   const result = document.getElementById("copilotResult");
