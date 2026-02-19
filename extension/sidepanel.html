@@ -6,209 +6,145 @@
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="panel-header">
-        <div class="brand">Vaulty</div>
-        <div class="version">Agent</div>
+    <!-- Auth screen — shown until user is logged in -->
+    <div id="auth-screen">
+      <div class="auth-card">
+        <div class="auth-brand">Vaulty</div>
+        <div class="auth-tagline">Agent</div>
+        <h2 class="auth-title">Sign in</h2>
+        <p class="auth-subtitle">Paid subscription required</p>
+        <input id="auth-email" class="input" type="email" placeholder="Email" autocomplete="username" />
+        <input id="auth-password" class="input" type="password" placeholder="Password" autocomplete="current-password" />
+        <button id="auth-submit" class="btn auth-btn">Sign In</button>
+        <p id="auth-error" class="auth-error hidden"></p>
+        <p class="auth-footer">
+          No account or need to upgrade?
+          <a href="https://vaulty.ca/plans" target="_blank" rel="noopener">View plans</a>
+        </p>
       </div>
-      <div class="tabs">
-        <button class="tab active" data-tab="apply">Apply</button>
-        <button class="tab" data-tab="copilot">Copilot</button>
-        <button class="tab" data-tab="profile">Profile</button>
-        <button class="tab" data-tab="settings">Settings</button>
-      </div>
+    </div>
 
-      <!-- Apply Tab -->
-      <div id="tab-apply" class="tab-content active">
-        <label class="label">Start URL</label>
-        <div class="url-row">
-          <input id="url" class="input" placeholder="https://example.com/apply" />
-          <button id="useCurrentTab" class="btn-icon" title="Use current tab URL">📍</button>
+    <!-- Main app — hidden until authenticated -->
+    <div id="main-app" class="hidden">
+      <div class="wrap">
+        <div class="panel-header">
+          <div>
+            <div class="brand">Vaulty</div>
+            <div class="version">Agent</div>
+          </div>
+          <button id="auth-logout" class="btn-logout" title="Sign out">Sign out</button>
         </div>
-        <div class="row">
-          <label class="radio"><input type="radio" name="mode" value="live" checked /> Live</label>
-          <label class="radio"><input type="radio" name="mode" value="background" /> Background</label>
+        <div class="tabs">
+          <button class="tab active" data-tab="apply">Apply</button>
+          <button class="tab" data-tab="copilot">Copilot</button>
+          <button class="tab" data-tab="profile">Profile</button>
+          <button class="tab" data-tab="settings">Settings</button>
         </div>
-        <button id="start" class="btn">Start Agent</button>
-        <button id="stop" class="btn secondary">Stop</button>
-        <hr />
-        <div class="status">
-          <div><b>Job:</b> <span id="jobId">—</span></div>
-          <div><b>Status:</b> <span id="status">idle</span></div>
-          <div><b>Step:</b> <span id="step">0</span></div>
-          <div id="jobUrlDisplay" class="job-url hidden"><b>URL:</b> <span id="jobUrl">—</span></div>
-        </div>
-        <div id="liveStep" class="live-step hidden">
-          <div class="live-step-header">Current action</div>
-          <div id="liveStepContent" class="live-step-content"></div>
-        </div>
-        <div id="continueSection" class="continue-section hidden">
-          <div class="info">Job paused. Ready to continue?</div>
-          <button id="continueJob" class="btn">Continue</button>
-        </div>
-        <div id="approval" class="approval hidden">
-          <div class="warn">Approval required before submit.</div>
-          <button id="approve" class="btn danger">Approve & Continue</button>
-        </div>
-        <div id="passwordRequest" class="verify hidden">
-          <div class="warn">Password required for login</div>
-          <input id="passwordInput" class="input" type="password" placeholder="Enter password" />
-          <button id="sendPassword" class="btn">Send Password</button>
-        </div>
-        <div id="otpRequest" class="verify hidden">
-          <div class="warn">Verification code required</div>
-          <input id="otp" class="input" placeholder="Enter OTP / Code" />
-          <button id="sendOtp" class="btn">Send Code</button>
-        </div>
-        <hr />
-        <div class="section-title">Agent Logs</div>
-        <div class="logs-actions">
-          <button id="refreshLogs" class="btn-small">Refresh</button>
-          <button id="clearLogs" class="btn-small secondary">Clear</button>
-          <button id="exportLogs" class="btn-small secondary">Export</button>
-        </div>
-        <div id="logsContainer" class="logs-container"></div>
-      </div>
 
-      <!-- Copilot Tab -->
-      <div id="tab-copilot" class="tab-content">
-        <div class="section-title">Page Summarizer</div>
-        <p class="hint">Summarize the current page. Uses the active tab.</p>
-        <div id="copilotPageInfo" class="copilot-page-info hidden"></div>
-        <button id="copilotSummarize" class="btn">Summarize this page</button>
-        <div id="copilotLoading" class="copilot-loading hidden">
-          <div class="skeleton-line"></div>
-          <div class="skeleton-line"></div>
-          <div class="skeleton-line short"></div>
+        <!-- Apply Tab -->
+        <div id="tab-apply" class="tab-content active">
+          <div class="aa-status-box" id="status-box">
+            <span id="status-icon">💤</span>
+            <span id="status-text">Ready. Open a form page and click Fill.</span>
+          </div>
+          <div class="apply-action-wrap">
+            <button id="btn-fill" class="apply-circle-btn">Fill This Form</button>
+          </div>
         </div>
-        <div id="copilotResult" class="copilot-card copilot-result hidden"></div>
-      </div>
 
-      <!-- Profile Tab -->
-      <div id="tab-profile" class="tab-content">
-        <div class="section-title">Login Credentials</div>
-        <p class="hint">Used for account creation and login forms</p>
-        <label class="label">Email</label>
-        <input id="profile-email" class="input" type="email" placeholder="john@example.com" />
-        <label class="label">Password</label>
-        <input id="profile-password" class="input" type="password" placeholder="Your preferred password" />
-        <p class="hint">Stored locally. Never sent to servers.</p>
-        <div class="row">
-          <label class="checkbox"><input type="checkbox" id="profile-preferOAuth" /> Prefer Login with Google</label>
+        <!-- Copilot Tab -->
+        <div id="tab-copilot" class="tab-content">
+          <div class="section-title">Copilot</div>
+          <p class="hint">Summarize, interactive quizzes and draft emails</p>
+          <div id="copilotPageInfo" class="copilot-page-info hidden"></div>
+          <div id="copilotLoading" class="copilot-loading hidden">
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line"></div>
+            <div class="skeleton-line short"></div>
+          </div>
+          <div id="copilotResult" class="copilot-card copilot-result hidden"></div>
+          <div class="copilot-action-wrap">
+            <button id="copilotSummarize" class="copilot-circle-btn">Assist me here</button>
+          </div>
         </div>
-        <div class="section-title">Personal</div>
-        <div class="row">
-          <div class="field"><label class="label">First Name</label><input id="profile-firstName" class="input" placeholder="John" /></div>
-          <div class="field"><label class="label">Last Name</label><input id="profile-lastName" class="input" placeholder="Doe" /></div>
-        </div>
-        <label class="label">Phone</label>
-        <input id="profile-phone" class="input" type="tel" placeholder="+1 555 123 4567" />
-        <div class="section-title">EEO / Demographics (Optional)</div>
-        <label class="label">Gender</label>
-        <select id="profile-eeo-gender" class="input">
-          <option value="">—</option>
-          <option value="Male">Male</option>
-          <option value="Female">Female</option>
-          <option value="Non-binary">Non-binary</option>
-          <option value="Prefer not to say">Prefer not to say</option>
-          <option value="Decline to self-identify">Decline to self-identify</option>
-        </select>
-        <label class="label">Race / Ethnicity</label>
-        <select id="profile-eeo-raceEthnicity" class="input">
-          <option value="">—</option>
-          <option value="American Indian or Alaska Native">American Indian or Alaska Native</option>
-          <option value="Asian">Asian</option>
-          <option value="Black or African American">Black or African American</option>
-          <option value="Hispanic or Latino">Hispanic or Latino</option>
-          <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian or Other Pacific Islander</option>
-          <option value="White">White</option>
-          <option value="Two or more races">Two or more races</option>
-          <option value="Prefer not to say">Prefer not to say</option>
-          <option value="Decline to self-identify">Decline to self-identify</option>
-        </select>
-        <label class="label">Veteran Status</label>
-        <select id="profile-eeo-veteranStatus" class="input">
-          <option value="">—</option>
-          <option value="I am a protected veteran">I am a protected veteran</option>
-          <option value="I am not a protected veteran">I am not a protected veteran</option>
-          <option value="Prefer not to say">Prefer not to say</option>
-          <option value="Decline to self-identify">Decline to self-identify</option>
-        </select>
-        <div class="section-title">Address</div>
-        <label class="label">Street</label>
-        <input id="profile-street" class="input" placeholder="123 Main St" />
-        <label class="label">Apt/Suite</label>
-        <input id="profile-street2" class="input" placeholder="Apt 4B" />
-        <div class="row">
-          <div class="field"><label class="label">City</label><input id="profile-city" class="input" placeholder="San Francisco" /></div>
-          <div class="field"><label class="label">State</label><input id="profile-state" class="input" placeholder="CA" /></div>
-        </div>
-        <div class="row">
-          <div class="field"><label class="label">ZIP</label><input id="profile-zipCode" class="input" placeholder="94102" /></div>
-          <div class="field"><label class="label">Country</label><input id="profile-country" class="input" placeholder="USA" /></div>
-        </div>
-        <div class="section-title">Professional</div>
-        <label class="label">Company</label>
-        <input id="profile-company" class="input" placeholder="Acme Inc" />
-        <label class="label">Job Title</label>
-        <input id="profile-jobTitle" class="input" placeholder="Software Engineer" />
-        <label class="label">LinkedIn</label>
-        <input id="profile-linkedIn" class="input" placeholder="https://linkedin.com/in/johndoe" />
-        <label class="label">GitHub</label>
-        <input id="profile-github" class="input" placeholder="https://github.com/johndoe" />
-        <label class="label">Website</label>
-        <input id="profile-website" class="input" placeholder="https://johndoe.com" />
-        <div class="section-title">Resume / CV</div>
-        <div class="file-upload-row">
-          <input type="file" id="profile-resumeFile" accept=".pdf,.doc,.docx" style="display:none" />
-          <button id="selectResumeFile" class="btn secondary">Select File</button>
-          <span id="resumeFileName" class="file-name">No file selected</span>
-          <button id="removeResumeFile" class="btn-icon danger hidden" title="Remove">✕</button>
-        </div>
-        <label class="label">Resume Data (Text or JSON)</label>
-        <textarea id="profile-resume" class="input textarea" placeholder="Paste resume text or JSON..."></textarea>
-        <button id="saveProfile" class="btn">Save Profile</button>
-        <button id="clearProfile" class="btn secondary">Clear All</button>
-        <div id="profileStatus" class="status-msg"></div>
-      </div>
 
-      <!-- Settings Tab -->
-      <div id="tab-settings" class="tab-content">
-        <div class="section-title">API Configuration</div>
-        <label class="label">Backend URL</label>
-        <input id="settings-apiBase" class="input" placeholder="http://localhost:3000" />
-        <div class="section-title">LLM Provider</div>
-        <label class="label">Provider</label>
-        <select id="settings-llmProvider" class="input">
-          <option value="">Use Backend Default</option>
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Anthropic</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="ollama">Ollama</option>
-        </select>
-        <label class="label">API Key</label>
-        <input id="settings-llmApiKey" class="input" type="password" placeholder="sk-..." />
-        <label class="label">Model</label>
-        <input id="settings-llmModel" class="input" placeholder="gpt-4o-mini" />
-        <div id="ollamaSettings" class="hidden">
-          <label class="label">Ollama URL</label>
-          <input id="settings-ollamaUrl" class="input" placeholder="http://localhost:11434" />
+        <!-- Profile Tab -->
+        <div id="tab-profile" class="tab-content">
+          <div class="section-title">Personal</div>
+          <div class="row">
+            <div class="field"><label class="label">First Name</label><input id="profile-firstName" class="input" placeholder="John" /></div>
+            <div class="field"><label class="label">Last Name</label><input id="profile-lastName" class="input" placeholder="Doe" /></div>
+          </div>
+          <label class="label">Email</label>
+          <input id="profile-email" class="input" type="email" placeholder="john@example.com" />
+          <label class="label">Phone</label>
+          <input id="profile-phone" class="input" type="tel" placeholder="+1 555 123 4567" />
+          <div class="section-title">EEO / Demographics (Optional)</div>
+          <label class="label">Gender</label>
+          <select id="profile-gender" class="input">
+            <option value="">—</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Non-binary">Non-binary</option>
+            <option value="Prefer not to say">Prefer not to say</option>
+            <option value="Decline to self-identify">Decline to self-identify</option>
+          </select>
+          <label class="label">Race / Ethnicity</label>
+          <select id="profile-raceEthnicity" class="input">
+            <option value="">—</option>
+            <option value="American Indian or Alaska Native">American Indian or Alaska Native</option>
+            <option value="Asian">Asian</option>
+            <option value="Black or African American">Black or African American</option>
+            <option value="Hispanic or Latino">Hispanic or Latino</option>
+            <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian or Other Pacific Islander</option>
+            <option value="White">White</option>
+            <option value="Two or more races">Two or more races</option>
+            <option value="Prefer not to say">Prefer not to say</option>
+            <option value="Decline to self-identify">Decline to self-identify</option>
+          </select>
+          <label class="label">Veteran Status</label>
+          <select id="profile-veteranStatus" class="input">
+            <option value="">—</option>
+            <option value="I am a protected veteran">I am a protected veteran</option>
+            <option value="I am not a protected veteran">I am not a protected veteran</option>
+            <option value="Prefer not to say">Prefer not to say</option>
+            <option value="Decline to self-identify">Decline to self-identify</option>
+          </select>
+          <div class="section-title">Address</div>
+          <label class="label">Street</label>
+          <input id="profile-street" class="input" placeholder="123 Main St" />
+          <label class="label">Apt/Suite</label>
+          <input id="profile-street2" class="input" placeholder="Apt 4B" />
+          <div class="row">
+            <div class="field"><label class="label">City</label><input id="profile-city" class="input" placeholder="San Francisco" /></div>
+            <div class="field"><label class="label">State</label><input id="profile-state" class="input" placeholder="CA" /></div>
+          </div>
+          <div class="row">
+            <div class="field"><label class="label">ZIP</label><input id="profile-zipCode" class="input" placeholder="94102" /></div>
+            <div class="field"><label class="label">Country</label><input id="profile-country" class="input" placeholder="USA" /></div>
+          </div>
+          <div class="section-title">Links</div>
+          <label class="label">LinkedIn</label>
+          <input id="profile-linkedIn" class="input" placeholder="https://linkedin.com/in/johndoe" />
+          <label class="label">Website</label>
+          <input id="profile-website" class="input" placeholder="https://johndoe.com" />
+          <button id="saveProfile" class="btn">Save Profile</button>
+          <button id="clearProfile" class="btn secondary">Clear All</button>
+          <div id="profileStatus" class="status-msg"></div>
         </div>
-        <div class="section-title">Behavior</div>
-        <div class="row">
-          <label class="checkbox"><input type="checkbox" id="behavior-autopilotEnabled" /> Autopilot</label>
+
+        <!-- Settings Tab -->
+        <div id="tab-settings" class="tab-content">
+          <div class="section-title">API Configuration</div>
+          <label class="label">Backend URL</label>
+          <input id="settings-apiBase" class="input" placeholder="https://agent.vaulty.ca" />
+          <button id="saveSettings" class="btn">Save Settings</button>
+          <div id="settingsStatus" class="status-msg"></div>
+          <hr />
+          <div class="section-title">Debug</div>
+          <button id="exportProfile" class="btn secondary">Export Profile</button>
+          <button id="viewStorage" class="btn secondary">View Storage</button>
         </div>
-        <div class="row">
-          <label class="checkbox"><input type="checkbox" id="behavior-capEnabled" /> Enable step cap</label>
-        </div>
-        <label class="label">Max Steps</label>
-        <input id="behavior-maxSteps" class="input" type="number" min="1" placeholder="40" />
-        <button id="saveSettings" class="btn">Save Settings</button>
-        <div id="settingsStatus" class="status-msg"></div>
-        <hr />
-        <div class="section-title">Debug</div>
-        <button id="exportProfile" class="btn secondary">Export Profile</button>
-        <button id="viewStorage" class="btn secondary">View Storage</button>
       </div>
     </div>
     <script src="sidepanel.js"></script>

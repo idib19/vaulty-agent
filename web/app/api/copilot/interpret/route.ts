@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { corsHeaders } from "@/lib/cors";
+import { cors } from "@/lib/cors";
+import { verifyExtensionAuth, isAuthError } from "@/lib/auth";
+import { enforceRateLimit } from "@/lib/rate-limit";
 import { callLLM, callLLMWithVision, getConfiguredProvider, isVisionSupported } from "@/lib/llm/router";
 import {
   COPILOT_SUMMARIZE_SYSTEM,
@@ -58,26 +60,32 @@ function parseSummaryResponse(content: string): CopilotSummaryResponse {
   }
 }
 
-export async function OPTIONS() {
-  return NextResponse.json({}, { headers: corsHeaders });
+export async function OPTIONS(request: NextRequest) {
+  return NextResponse.json({}, { headers: cors(request) });
 }
 
 export async function POST(request: NextRequest) {
+  const auth = await verifyExtensionAuth(request);
+  if (isAuthError(auth)) return auth;
+
+  const limited = await enforceRateLimit(request, auth.token, auth.userId, "copilot");
+  if (limited) return limited;
+
   try {
     const body = (await request.json()) as CopilotInterpretRequest;
     const { task, screenshot, context } = body;
 
     if (!context?.url) {
       return NextResponse.json(
-        { error: "Missing required field: context.url" },
-        { status: 400, headers: corsHeaders }
+        { error: "missing_context", message: "Could not determine which page to summarize. Try refreshing the page." },
+        { status: 400, headers: cors(request) }
       );
     }
 
     if (task !== "summarize") {
       return NextResponse.json(
-        { error: "Unsupported task. MVP supports only: summarize" },
-        { status: 400, headers: corsHeaders }
+        { error: "unsupported_task", message: "This feature isn't available yet. Only page summarization is supported." },
+        { status: 400, headers: cors(request) }
       );
     }
 
@@ -90,8 +98,8 @@ export async function POST(request: NextRequest) {
 
     if (!hasApiKey) {
       return NextResponse.json(
-        { error: "No LLM configured. Set OPENAI_API_KEY or another provider." },
-        { status: 503, headers: corsHeaders }
+        { error: "service_unavailable", message: "The AI service is temporarily unavailable. Please try again later." },
+        { status: 503, headers: cors(request) }
       );
     }
 
@@ -112,7 +120,7 @@ export async function POST(request: NextRequest) {
       });
 
       const result = parseSummaryResponse(response.content);
-      return NextResponse.json(result, { headers: corsHeaders });
+      return NextResponse.json(result, { headers: cors(request) });
     }
 
     const response = await callLLM(
@@ -129,13 +137,12 @@ export async function POST(request: NextRequest) {
     );
 
     const result = parseSummaryResponse(response.content);
-    return NextResponse.json(result, { headers: corsHeaders });
+    return NextResponse.json(result, { headers: cors(request) });
   } catch (err) {
     console.error("[Copilot] Interpret error:", err);
-    const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json(
-      { error: message },
-      { status: 500, headers: corsHeaders }
+      { error: "ai_error", message: "The AI couldn't summarize this page right now. Please try again." },
+      { status: 500, headers: cors(request) }
     );
   }
 }

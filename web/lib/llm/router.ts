@@ -24,8 +24,6 @@ export function getConfiguredProvider(): LLMProvider {
 export async function callLLM(request: LLMRequest, provider?: LLMProvider): Promise<LLMResponse> {
   const selectedProvider = provider || getConfiguredProvider();
   
-  console.log(`[LLM Router] Using provider: ${selectedProvider}`);
-  
   switch (selectedProvider) {
     case "openai":
       return callOpenAI(request);
@@ -43,8 +41,6 @@ export async function callLLM(request: LLMRequest, provider?: LLMProvider): Prom
 // Vision-enabled LLM call (currently only supports OpenAI GPT-4o)
 export async function callLLMWithVision(request: LLMVisionRequest, provider?: LLMProvider): Promise<LLMResponse> {
   const selectedProvider = provider || getConfiguredProvider();
-  
-  console.log(`[LLM Router] Using vision provider: ${selectedProvider}`);
   
   // Currently only OpenAI supports vision well
   // For other providers, we fall back to text-only with a warning

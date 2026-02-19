@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { corsHeaders } from "@/lib/cors";
+import { cors } from "@/lib/cors";
+import { verifyExtensionAuth, isAuthError } from "@/lib/auth";
 
-export async function OPTIONS() {
-  return NextResponse.json({}, { headers: corsHeaders });
+export async function OPTIONS(request: NextRequest) {
+  return NextResponse.json({}, { headers: cors(request) });
 }
 
 export async function POST(request: NextRequest) {
-  const body = await request.json();
-  
-  // Just print logs for now
-  console.log("[agent-log]", body);
-  
-  return NextResponse.json({ ok: true }, { headers: corsHeaders });
+  const auth = await verifyExtensionAuth(request);
+  if (isAuthError(auth)) return auth;
+
+  return NextResponse.json({ ok: true }, { headers: cors(request) });
 }
 

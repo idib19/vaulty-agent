@@ -1,11 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "Agent Runner (Live + Background)",
-  "version": "0.1.0",
+  "name": "Vaulty",
+  "version": "1.0.0",
   "permissions": ["tabs", "scripting", "storage", "activeTab", "sidePanel"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": {},
+  "icons": {
+    "16":  "icons/icon-16.png",
+    "32":  "icons/icon-32.png",
+    "48":  "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16":  "icons/icon-16.png",
+      "32":  "icons/icon-32.png",
+      "48":  "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
   "side_panel": {
     "default_path": "sidepanel.html"
   },
@@ -23,15 +36,9 @@
       "all_frames": true
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["overlay.js", "mini-overlay.js"],
-      "matches": ["<all_urls>"]
-    }
-  ],
   "externally_connectable": {
     "matches": [
-      "https://app.vaulty.ca/*",
+      "https://agent.vaulty.ca/*",
       "https://*.vaulty.ca/*",
       "http://localhost:3001/*",
       "http://localhost:5173/*",

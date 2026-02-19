@@ -1,6 +1,6 @@
 import type { LLMRequest, LLMResponse } from "../types";
 
-const DEFAULT_MODEL = "claude-3-5-sonnet-20241022";
+const DEFAULT_MODEL = "claude-sonnet-4-5";
 
 export async function callAnthropic(request: LLMRequest): Promise<LLMResponse> {
   const apiKey = process.env.ANTHROPIC_API_KEY;

@@ -79,8 +79,6 @@ export async function callOpenAIWithVision(request: LLMVisionRequest): Promise<L
     };
   });
 
-  console.log(`[OpenAI Vision] Calling ${model} with ${request.images?.length || 0} image(s)`);
-
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -101,9 +99,7 @@ export async function callOpenAIWithVision(request: LLMVisionRequest): Promise<L
   }
 
   const data = await response.json();
-  
-  console.log(`[OpenAI Vision] Response received, tokens used: ${data.usage?.total_tokens || "unknown"}`);
-  
+
   return {
     content: data.choices[0]?.message?.content || "",
     usage: data.usage ? {

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Agent in Browser",
-  description: "Browser automation agent backend",
+  title: "Vaulty Agent Extension",
+  description: "Vaulty Agent Extension",
 };
 
 export default function RootLayout({
