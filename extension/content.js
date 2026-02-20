@@ -6,6 +6,11 @@ let waitingForNextStep = false;
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.type) {
 
+    case "ping": {
+      sendResponse({ ok: true });
+      return false;
+    }
+
     case "OBSERVE_LIGHT": {
       sendResponse({
         url: location.href,

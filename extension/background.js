@@ -42,8 +42,18 @@ async function getApiBase() {
 }
 
 function sendToTab(tabId, msg) {
-  // Target only the main frame (frameId: 0) to avoid iframes responding
   return chrome.tabs.sendMessage(tabId, msg, { frameId: 0 });
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    const res = await chrome.tabs.sendMessage(tabId, { type: "ping" }, { frameId: 0 });
+    if (res?.ok) return;
+  } catch {}
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"],
+  });
 }
 
 function friendlyError(fallback, err) {
@@ -81,6 +91,13 @@ async function captureScreenshot(tabId) {
 
 async function copilotSummarize(tabId) {
   const apiBase = await getApiBase();
+
+  try {
+    await ensureContentScript(tabId);
+  } catch {
+    throw new Error("Cannot access this page. Click the Vaulty icon or press ⌘⇧V first.");
+  }
+
   let context = { url: "", title: "", selectedText: "", pageText: "" };
   try {
     context = await sendToTab(tabId, { type: "OBSERVE_LIGHT" });
@@ -349,6 +366,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 async function requestSnapshotAndFill(tabId) {
   notifyPanel(tabId, "analyzing");
+
+  try {
+    await ensureContentScript(tabId);
+  } catch (e) {
+    notifyPanel(tabId, "error", "Cannot access this page. Click the Vaulty icon or press ⌘⇧V first.");
+    delete sessions[tabId];
+    return;
+  }
 
   let response = null;
   for (let i = 0; i < 5; i++) {

@@ -1,4 +1,6 @@
 const API_BASE_DEFAULT = "https://agent.vaulty.ca";
+const AGENT_NAME_DEFAULT = "Agent";
+const ACCENT_COLOR_DEFAULT = "#6366f1";
 const PROFILE_KEY = "userProfile";
 
 function uid() {
@@ -106,10 +108,21 @@ async function initAuth() {
   }
 }
 
+document.getElementById("auth-consent-check")?.addEventListener("change", (e) => {
+  const btn = document.getElementById("auth-submit");
+  if (btn) btn.disabled = !e.target.checked;
+});
+
 document.getElementById("auth-submit")?.addEventListener("click", async () => {
   const email = document.getElementById("auth-email").value.trim();
   const password = document.getElementById("auth-password").value;
   const btn = document.getElementById("auth-submit");
+  const consent = document.getElementById("auth-consent-check");
+
+  if (!consent?.checked) {
+    setAuthError("Please accept the Privacy Policy to continue.");
+    return;
+  }
 
   if (!email || !password) {
     setAuthError("Please enter your email and password.");
@@ -419,16 +432,64 @@ document.getElementById("clearProfile")?.addEventListener("click", async () => {
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
 
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return { r, g, b };
+}
+
+function darkenHex(hex, amount = 0.12) {
+  const { r, g, b } = hexToRgb(hex);
+  return `#${[r, g, b].map(c => Math.max(0, Math.round(c * (1 - amount))).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function applyAccentColor(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const root = document.documentElement;
+  root.style.setProperty("--accent", hex);
+  root.style.setProperty("--accent-dark", darkenHex(hex));
+  root.style.setProperty("--accent-rgb", `${r}, ${g}, ${b}`);
+}
+
+function applyAgentName(name) {
+  const label = name || AGENT_NAME_DEFAULT;
+  const versionEl = document.querySelector(".version");
+  const taglineEl = document.querySelector(".auth-tagline");
+  if (versionEl) versionEl.textContent = label;
+  if (taglineEl) taglineEl.textContent = label;
+}
+
 async function loadSettings() {
-  const data = await chrome.storage.local.get(["apiBase"]);
+  const data = await chrome.storage.local.get(["apiBase", "agentName", "accentColor"]);
   const apiBaseEl = document.getElementById("settings-apiBase");
   if (apiBaseEl) apiBaseEl.value = data.apiBase || API_BASE_DEFAULT;
+
+  const agentNameEl = document.getElementById("settings-agentName");
+  if (agentNameEl) agentNameEl.value = data.agentName || AGENT_NAME_DEFAULT;
+  applyAgentName(data.agentName);
+
+  const color = data.accentColor || ACCENT_COLOR_DEFAULT;
+  const accentColorEl = document.getElementById("settings-accentColor");
+  const hexLabel = document.getElementById("settings-accentColorHex");
+  if (accentColorEl) accentColorEl.value = color;
+  if (hexLabel) hexLabel.textContent = color;
+  applyAccentColor(color);
 }
 
 document.getElementById("saveSettings")?.addEventListener("click", async () => {
   const apiBase = document.getElementById("settings-apiBase").value.trim() || API_BASE_DEFAULT;
-  await chrome.storage.local.set({ apiBase });
+  const agentName = document.getElementById("settings-agentName").value.trim() || AGENT_NAME_DEFAULT;
+  const accentColor = document.getElementById("settings-accentColor").value || ACCENT_COLOR_DEFAULT;
+  await chrome.storage.local.set({ apiBase, agentName, accentColor });
+  applyAgentName(agentName);
+  applyAccentColor(accentColor);
   showStatusMsg("settingsStatus", "Settings saved!", true);
+});
+
+document.getElementById("settings-accentColor")?.addEventListener("input", (e) => {
+  const hexLabel = document.getElementById("settings-accentColorHex");
+  if (hexLabel) hexLabel.textContent = e.target.value;
 });
 
 document.getElementById("exportProfile")?.addEventListener("click", async () => {

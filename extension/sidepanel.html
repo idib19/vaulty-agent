@@ -15,7 +15,19 @@
         <p class="auth-subtitle">Paid subscription required</p>
         <input id="auth-email" class="input" type="email" placeholder="Email" autocomplete="username" />
         <input id="auth-password" class="input" type="password" placeholder="Password" autocomplete="current-password" />
-        <button id="auth-submit" class="btn auth-btn">Sign In</button>
+        <div class="auth-consent">
+          <p>By signing in, you agree that:</p>
+          <ul>
+            <li>Page content is sent to Vaulty servers for AI processing</li>
+            <li>Data is processed by third-party AI providers</li>
+            <li>Your data is not used to train AI models</li>
+          </ul>
+          <label class="auth-consent-label">
+            <input id="auth-consent-check" type="checkbox" />
+            <span>I agree to the <a href="https://www.vaulty.ca/privacy" target="_blank" rel="noopener">Privacy Policy</a> and consent to data processing as described above</span>
+          </label>
+        </div>
+        <button id="auth-submit" class="btn auth-btn" disabled>Sign In</button>
         <p id="auth-error" class="auth-error hidden"></p>
         <p class="auth-footer">
           No account or need to upgrade?
@@ -140,6 +152,33 @@
           <input id="settings-apiBase" class="input" placeholder="https://agent.vaulty.ca" />
           <button id="saveSettings" class="btn">Save Settings</button>
           <div id="settingsStatus" class="status-msg"></div>
+          <hr />
+          <div class="section-title">Customization</div>
+          <label class="label">Agent Name</label>
+          <input id="settings-agentName" class="input" placeholder="Agent" maxlength="24" />
+          <label class="label">Accent Color</label>
+          <div class="color-picker-row">
+            <input id="settings-accentColor" type="color" value="#6366f1" class="color-input" />
+            <span id="settings-accentColorHex" class="color-hex-label">#6366f1</span>
+          </div>
+          <hr />
+          <div class="section-title">Support &amp; Legal</div>
+          <div class="support-links">
+            <a href="https://www.vaulty.ca/help" target="_blank" rel="noopener" class="support-link">
+              <span class="support-link-icon">?</span>
+              <span>
+                <span class="support-link-title">Help &amp; Support</span>
+                <span class="support-link-desc">Get help from our team</span>
+              </span>
+            </a>
+            <a href="https://www.vaulty.ca/privacy" target="_blank" rel="noopener" class="support-link">
+              <span class="support-link-icon">&#128274;</span>
+              <span>
+                <span class="support-link-title">Privacy Policy</span>
+                <span class="support-link-desc">How we protect your data</span>
+              </span>
+            </a>
+          </div>
           <hr />
           <div class="section-title">Debug</div>
           <button id="exportProfile" class="btn secondary">Export Profile</button>
