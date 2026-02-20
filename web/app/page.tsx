@@ -411,7 +411,7 @@ export default function Home() {
             </a>
             <span className="footer-sep">·</span>
             <a
-              href="https://vaulty.ca/contact"
+              href="https://www.vaulty.ca/help"
               className="footer-link"
               target="_blank"
               rel="noopener noreferrer"
