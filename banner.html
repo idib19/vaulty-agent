@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280" />
+<title>Vaulty Agent — Promo Banner 1280×800</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 1280px;
+    height: 800px;
+    overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #0f0f14;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .banner {
+    width: 1280px;
+    height: 800px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── Background layers ── */
+  .bg-glow-left {
+    position: absolute;
+    top: -120px;
+    left: -80px;
+    width: 780px;
+    height: 780px;
+    background: radial-gradient(ellipse at center,
+      rgba(99,102,241,0.22) 0%,
+      rgba(124,58,237,0.10) 45%,
+      transparent 70%);
+    pointer-events: none;
+  }
+
+  .bg-glow-right {
+    position: absolute;
+    top: 50px;
+    right: -100px;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(ellipse at center,
+      rgba(124,58,237,0.14) 0%,
+      transparent 65%);
+    pointer-events: none;
+  }
+
+  /* Subtle grid */
+  .bg-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
+    background-size: 64px 64px;
+    pointer-events: none;
+  }
+
+  /* Left gradient fade */
+  .bg-fade {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+      rgba(15,15,20,0.60) 0%,
+      transparent 40%,
+      transparent 60%,
+      rgba(15,15,20,0.50) 100%);
+    pointer-events: none;
+  }
+
+  /* ── Layout ── */
+  .content {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 0 80px;
+    gap: 64px;
+  }
+
+  /* ── Left: Copy ── */
+  .left {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 36px;
+  }
+
+  .logo-mark {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 20px rgba(99,102,241,0.50);
+    flex-shrink: 0;
+  }
+
+  .logo-mark svg { display: block; }
+
+  .logo-wordmark {
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.04em;
+  }
+
+  .logo-sub {
+    font-size: 13px;
+    font-weight: 500;
+    color: #71717a;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-left: 2px;
+    margin-top: 2px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 14px 5px 10px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.28);
+    border-radius: 100px;
+    font-size: 13px;
+    color: #a5b4fc;
+    font-weight: 600;
+    margin-bottom: 24px;
+    letter-spacing: 0.01em;
+  }
+
+  .badge-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #6366f1;
+    flex-shrink: 0;
+    box-shadow: 0 0 6px rgba(99,102,241,0.8);
+  }
+
+  .headline {
+    font-size: 68px;
+    font-weight: 900;
+    line-height: 1.02;
+    letter-spacing: -0.05em;
+    color: #fff;
+    margin-bottom: 20px;
+  }
+
+  .headline-gradient {
+    background: linear-gradient(135deg, #6366f1 0%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .subheadline {
+    font-size: 20px;
+    color: #a1a1aa;
+    line-height: 1.6;
+    max-width: 460px;
+    margin-bottom: 40px;
+    font-weight: 400;
+  }
+
+  /* Feature pills */
+  .features {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 48px;
+  }
+
+  .feature-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    color: #e4e4e7;
+    font-weight: 500;
+  }
+
+  .feature-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.20);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  /* URL tag */
+  .url-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: #52525b;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+
+  .url-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #3f3f46;
+  }
+
+  /* ── Right: Mockup ── */
+  .right {
+    flex: 0 0 420px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+  }
+
+  .mockup-glow {
+    position: absolute;
+    bottom: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 360px;
+    height: 80px;
+    background: radial-gradient(ellipse at center,
+      rgba(99,102,241,0.40) 0%,
+      transparent 70%);
+    filter: blur(24px);
+  }
+
+  .mockup-card {
+    width: 380px;
+    background: #1e1e24;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(99,102,241,0.08),
+      0 32px 80px rgba(0,0,0,0.60),
+      0 0 100px rgba(99,102,241,0.12);
+    position: relative;
+    z-index: 2;
+  }
+
+  /* Mockup top bar */
+  .mockup-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(15,15,20,0.40);
+  }
+
+  .mockup-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+
+  .mockup-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mockup-name {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.03em;
+  }
+
+  .mockup-name-sub {
+    font-size: 10px;
+    color: #71717a;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .mockup-signout {
+    font-size: 11px;
+    color: #52525b;
+    border: 1px solid rgba(255,255,255,0.07);
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: transparent;
+  }
+
+  /* Tabs */
+  .mockup-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 14px 8px;
+    background: #0f0f14;
+  }
+
+  .mockup-tab {
+    flex: 1;
+    padding: 8px 6px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #71717a;
+    text-align: center;
+  }
+
+  .mockup-tab.active {
+    background: rgba(99,102,241,0.16);
+    color: #a5b4fc;
+    font-weight: 600;
+  }
+
+  /* Body */
+  .mockup-body {
+    padding: 16px 18px 24px;
+  }
+
+  .mockup-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #18181b;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 20px;
+  }
+
+  .mockup-status-icon { font-size: 22px; flex-shrink: 0; }
+
+  .mockup-status-text {
+    font-size: 13px;
+    color: #a1a1aa;
+    line-height: 1.45;
+  }
+
+  .mockup-status-text strong {
+    color: #e4e4e7;
+    font-weight: 600;
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  .mockup-btn-wrap {
+    display: flex;
+    justify-content: center;
+    padding-top: 4px;
+  }
+
+  .mockup-fill-btn {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      0 0 0 8px rgba(99,102,241,0.10),
+      0 0 32px rgba(99,102,241,0.45),
+      0 8px 24px rgba(0,0,0,0.40);
+    font-size: 12px;
+    font-weight: 800;
+    color: #fff;
+    text-align: center;
+    line-height: 1.4;
+    letter-spacing: -0.01em;
+  }
+
+  /* Small log preview at bottom */
+  .mockup-log {
+    margin-top: 18px;
+    background: #18181b;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .log-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #52525b;
+  }
+
+  .log-badge {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+
+  .log-badge.fill  { background: rgba(99,102,241,0.18); color: #a5b4fc; }
+  .log-badge.click { background: rgba(252,211,77,0.15); color: #fcd34d; }
+  .log-badge.done  { background: rgba(134,239,172,0.15); color: #86efac; }
+
+  .log-text { color: #71717a; }
+
+  /* ── Bottom url bar ── */
+  .bottom-bar {
+    position: absolute;
+    bottom: 32px;
+    left: 80px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .bottom-url {
+    font-size: 13px;
+    color: #3f3f46;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .bottom-sep {
+    width: 1px;
+    height: 14px;
+    background: #27272a;
+  }
+</style>
+</head>
+<body>
+<div class="banner">
+
+  <!-- Background -->
+  <div class="bg-grid"></div>
+  <div class="bg-glow-left"></div>
+  <div class="bg-glow-right"></div>
+  <div class="bg-fade"></div>
+
+  <!-- Content -->
+  <div class="content">
+
+    <!-- Left: Copy -->
+    <div class="left">
+
+      <div class="logo-row">
+        <div class="logo-mark">
+          <svg width="24" height="24" viewBox="0 0 20 20" fill="none">
+            <path d="M4 4L10 16L16 4" stroke="white" stroke-width="2.8"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="logo-wordmark">Vaulty Agent</div>
+          <div class="logo-sub">Chrome Extension</div>
+        </div>
+      </div>
+
+      <div class="badge">
+        <span class="badge-dot"></span>
+        AI-Powered Form Assistant
+      </div>
+
+      <h1 class="headline">
+        Fill any form.<br />
+        <span class="headline-gradient">Instantly.</span>
+      </h1>
+
+      <p class="subheadline">
+        Your profile. Every form field. One click.
+      </p>
+
+      <div class="features">
+        <div class="feature-row">
+          <span class="feature-icon">⚡</span>
+          Auto-fills job applications, sign-ups &amp; surveys
+        </div>
+        <div class="feature-row">
+          <span class="feature-icon">🤖</span>
+          AI Copilot on every webpage
+        </div>
+        <div class="feature-row">
+          <span class="feature-icon">🔒</span>
+          Data never used to train AI models
+        </div>
+      </div>
+
+      <div class="url-tag">
+        <span class="url-dot"></span>
+        vaulty.ca/plans
+      </div>
+
+    </div>
+
+    <!-- Right: Mockup -->
+    <div class="right">
+      <div class="mockup-glow"></div>
+      <div class="mockup-card">
+
+        <div class="mockup-topbar">
+          <div class="mockup-brand">
+            <div class="mockup-logo">
+              <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                <path d="M4 4L10 16L16 4" stroke="white" stroke-width="2.8"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div>
+              <div class="mockup-name">Vaulty</div>
+              <div class="mockup-name-sub">Agent</div>
+            </div>
+          </div>
+          <span class="mockup-signout">Sign out</span>
+        </div>
+
+        <div class="mockup-tabs">
+          <div class="mockup-tab active">Apply</div>
+          <div class="mockup-tab">Copilot</div>
+          <div class="mockup-tab">Profile</div>
+          <div class="mockup-tab">Settings</div>
+        </div>
+
+        <div class="mockup-body">
+          <div class="mockup-status">
+            <span class="mockup-status-icon">✅</span>
+            <span class="mockup-status-text">
+              <strong>Ready</strong>
+              Open a form and click Fill.
+            </span>
+          </div>
+
+          <div class="mockup-btn-wrap">
+            <div class="mockup-fill-btn">Fill This<br />Form</div>
+          </div>
+
+          <div class="mockup-log">
+            <div class="log-row">
+              <span class="log-badge fill">FILL</span>
+              <span class="log-text">First Name → "Alex"</span>
+            </div>
+            <div class="log-row">
+              <span class="log-badge fill">FILL</span>
+              <span class="log-text">Email → "alex@email.com"</span>
+            </div>
+            <div class="log-row">
+              <span class="log-badge click">CLICK</span>
+              <span class="log-text">Submit button</span>
+            </div>
+            <div class="log-row">
+              <span class="log-badge done">DONE</span>
+              <span class="log-text">Form submitted successfully</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Bottom watermark -->
+  <div class="bottom-bar">
+    <span class="bottom-url">vaulty.ca</span>
+    <div class="bottom-sep"></div>
+    <span class="bottom-url">Available on the Chrome Web Store</span>
+  </div>
+
+</div>
+</body>
+</html>

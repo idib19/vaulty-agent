@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=440" />
+<title>Vaulty Agent — Promo Banner 440×280</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    width: 440px;
+    height: 280px;
+    overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #0f0f14;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .banner {
+    width: 440px;
+    height: 280px;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+
+  /* ── Background ── */
+  .bg-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(99,102,241,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,102,241,0.05) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  .bg-glow {
+    position: absolute;
+    top: -80px;
+    left: -60px;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(ellipse at center,
+      rgba(99,102,241,0.20) 0%,
+      rgba(124,58,237,0.08) 50%,
+      transparent 70%);
+    pointer-events: none;
+  }
+
+  .bg-glow-right {
+    position: absolute;
+    bottom: -60px;
+    right: -40px;
+    width: 280px;
+    height: 280px;
+    background: radial-gradient(ellipse at center,
+      rgba(124,58,237,0.15) 0%,
+      transparent 65%);
+    pointer-events: none;
+  }
+
+  .bg-fade {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg,
+      rgba(15,15,20,0.30) 0%,
+      transparent 35%,
+      transparent 55%,
+      rgba(15,15,20,0.55) 100%);
+    pointer-events: none;
+  }
+
+  /* ── Layout ── */
+  .content {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 28px 30px;
+    gap: 28px;
+  }
+
+  /* ── Left: Copy ── */
+  .left {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+
+  .logo-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 3px 14px rgba(99,102,241,0.50);
+    flex-shrink: 0;
+  }
+
+  .logo-wordmark {
+    font-size: 15px;
+    font-weight: 800;
+    color: #fff;
+    letter-spacing: -0.04em;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px 3px 8px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.26);
+    border-radius: 100px;
+    font-size: 10px;
+    color: #a5b4fc;
+    font-weight: 600;
+    margin-bottom: 12px;
+    letter-spacing: 0.01em;
+  }
+
+  .badge-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #6366f1;
+    box-shadow: 0 0 5px rgba(99,102,241,0.9);
+  }
+
+  .headline {
+    font-size: 30px;
+    font-weight: 900;
+    line-height: 1.05;
+    letter-spacing: -0.045em;
+    color: #fff;
+    margin-bottom: 10px;
+  }
+
+  .headline-gradient {
+    background: linear-gradient(135deg, #6366f1 0%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .subheadline {
+    font-size: 12px;
+    color: #71717a;
+    line-height: 1.55;
+    margin-bottom: 18px;
+    font-weight: 400;
+    max-width: 180px;
+  }
+
+  .url-tag {
+    font-size: 11px;
+    color: #3f3f46;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  /* ── Right: Mini Mockup ── */
+  .right {
+    flex: 0 0 168px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mockup-glow {
+    position: absolute;
+    bottom: -20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 140px;
+    height: 40px;
+    background: radial-gradient(ellipse at center,
+      rgba(99,102,241,0.45) 0%,
+      transparent 70%);
+    filter: blur(16px);
+  }
+
+  .mockup-card {
+    width: 164px;
+    background: #1e1e24;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(99,102,241,0.08),
+      0 20px 50px rgba(0,0,0,0.60),
+      0 0 60px rgba(99,102,241,0.12);
+    position: relative;
+    z-index: 2;
+  }
+
+  .mockup-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 11px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    background: rgba(15,15,20,0.50);
+  }
+
+  .mockup-brand {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .mockup-logo {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mockup-name {
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.02em;
+  }
+
+  .mockup-signout {
+    font-size: 8px;
+    color: #52525b;
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+
+  .mockup-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px 5px;
+    background: #0f0f14;
+  }
+
+  .mockup-tab {
+    flex: 1;
+    padding: 4px 2px;
+    border-radius: 4px;
+    font-size: 8px;
+    font-weight: 500;
+    color: #52525b;
+    text-align: center;
+  }
+
+  .mockup-tab.active {
+    background: rgba(99,102,241,0.16);
+    color: #a5b4fc;
+    font-weight: 600;
+  }
+
+  .mockup-body {
+    padding: 9px 10px 13px;
+  }
+
+  .mockup-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: #18181b;
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 7px;
+    padding: 8px 9px;
+    margin-bottom: 11px;
+  }
+
+  .mockup-status-icon { font-size: 13px; }
+
+  .mockup-status-text {
+    font-size: 8px;
+    color: #71717a;
+    line-height: 1.4;
+  }
+
+  .mockup-btn-wrap {
+    display: flex;
+    justify-content: center;
+  }
+
+  .mockup-fill-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow:
+      0 0 0 5px rgba(99,102,241,0.10),
+      0 0 20px rgba(99,102,241,0.45),
+      0 4px 14px rgba(0,0,0,0.40);
+    font-size: 7px;
+    font-weight: 800;
+    color: #fff;
+    text-align: center;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+<div class="banner">
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="bg-glow-right"></div>
+  <div class="bg-fade"></div>
+
+  <div class="content">
+
+    <!-- Left -->
+    <div class="left">
+      <div class="logo-row">
+        <div class="logo-mark">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+            <path d="M4 4L10 16L16 4" stroke="white" stroke-width="2.8"
+              stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <span class="logo-wordmark">Vaulty Agent</span>
+      </div>
+
+      <div class="badge">
+        <span class="badge-dot"></span>
+        AI-Powered Extension
+      </div>
+
+      <h1 class="headline">
+        Fill any form.<br />
+        <span class="headline-gradient">Instantly.</span>
+      </h1>
+
+      <p class="subheadline">
+        One click. Every field.<br />Any website.
+      </p>
+
+      <span class="url-tag">vaulty.ca/plans</span>
+    </div>
+
+    <!-- Right: Mini Mockup -->
+    <div class="right">
+      <div class="mockup-glow"></div>
+      <div class="mockup-card">
+        <div class="mockup-topbar">
+          <div class="mockup-brand">
+            <div class="mockup-logo">
+              <svg width="9" height="9" viewBox="0 0 20 20" fill="none">
+                <path d="M4 4L10 16L16 4" stroke="white" stroke-width="3"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <span class="mockup-name">Vaulty</span>
+          </div>
+          <span class="mockup-signout">Sign out</span>
+        </div>
+
+        <div class="mockup-tabs">
+          <div class="mockup-tab active">Apply</div>
+          <div class="mockup-tab">Copilot</div>
+          <div class="mockup-tab">Profile</div>
+          <div class="mockup-tab">···</div>
+        </div>
+
+        <div class="mockup-body">
+          <div class="mockup-status">
+            <span class="mockup-status-icon">✅</span>
+            <span class="mockup-status-text">Ready. Open a form and click Fill.</span>
+          </div>
+          <div class="mockup-btn-wrap">
+            <div class="mockup-fill-btn">Fill This<br />Form</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
