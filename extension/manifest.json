@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 3,
   "name": "Vaulty",
   "version": "1.0.0",
   "description": "AI-powered assistant that auto-fills web forms using your personal profile and summarizes page content.",
