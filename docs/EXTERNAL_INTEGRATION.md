@@ -382,7 +382,7 @@ export function ApplyWithVaultyButton({ job, coverLetter }: Props) {
   if (!isInstalled) {
     return (
       <a 
-        href="https://chrome.google.com/webstore/detail/vaulty" 
+        href="https://chromewebstore.google.com/detail/ckjbhmdffpkbfadgebjdpinldfokamfg?utm_source=item-share-cb"
         target="_blank"
         className="btn btn-secondary"
       >

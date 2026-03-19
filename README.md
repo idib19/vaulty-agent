@@ -55,6 +55,13 @@ vaulty-agent/
     └── styles.css
 ```
 
+## Installation
+
+**Install from the Chrome Web Store (recommended for end users):**
+[Add to Chrome →](https://chromewebstore.google.com/detail/ckjbhmdffpkbfadgebjdpinldfokamfg?utm_source=item-share-cb)
+
+---
+
 ## Quick Start
 
 ### 1. Install Dependencies

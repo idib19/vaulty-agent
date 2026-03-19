@@ -1,4 +1,4 @@
-const CHROME_STORE_URL = "https://chrome.google.com/webstore/detail/vaulty-agent";
+const CHROME_STORE_URL = "https://chromewebstore.google.com/detail/ckjbhmdffpkbfadgebjdpinldfokamfg?utm_source=item-share-cb";
 const PLANS_URL = "https://www.vaulty.ca/plans";
 const ONBOARDING_URL = "https://www.vaulty.ca/onboarding";
 
