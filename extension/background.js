@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "https://agent.vaulty.ca";
+const DEFAULT_API_BASE = "https://extension.vaulty.ca";
 const PROFILE_KEY = "userProfile";
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

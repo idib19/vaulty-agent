@@ -1,4 +1,4 @@
-const API_BASE_DEFAULT = "https://agent.vaulty.ca";
+const API_BASE_DEFAULT = "https://extension.vaulty.ca";
 const AGENT_NAME_DEFAULT = "Agent";
 const ACCENT_COLOR_DEFAULT = "#6366f1";
 const PROFILE_KEY = "userProfile";

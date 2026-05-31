@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS = [
-  "https://agent.vaulty.ca",
+  "https://extension.vaulty.ca",
   "https://vaulty.ca",
   "http://localhost:3000",
   "http://localhost:3001",
