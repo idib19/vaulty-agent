@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vaulty",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered assistant that auto-fills web forms using your personal profile and summarizes page content.",
   "homepage_url": "https://vaulty.ca",
   "permissions": ["scripting", "storage", "activeTab", "sidePanel"],
